@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="zh-CN" data-page="ch-09">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>第 9 章 Vault Agent：让应用完全不知道 Vault 的存在 · Vault 入门教程</title>
+<meta name="description" content="第 9 章 Vault Agent：让应用完全不知道 Vault 的存在 需求 我们有 30 个老服务，它们的配置读取方式五花八门：有的读环境变量、有的读 properties 文件、有的读 JSON。让每个团队都去改代码接入 Vault SDK，现实吗？ 更现实的需求是： 应用照旧读本地文件/环境">
+<meta name="generator" content="vault-tutorial static builder">
+<meta property="og:title" content="第 9 章 Vault Agent：让应用完全不知道 Vault 的存在 · Vault 入门教程">
+<meta property="og:type" content="article">
+<link rel="stylesheet" href="assets/style.css">
+<link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+<script>(function(){try{var t=localStorage.getItem('vt-theme');if(!t){t=window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light';}document.documentElement.dataset.theme=t;}catch(e){}})();</script>
+</head>
+<body>
+<a class="skip" href="#main">跳到正文</a>
+<header class="topbar">
+  <button class="icon-btn" id="navToggle" aria-label="切换目录" aria-expanded="false">☰</button>
+  <a class="brand" href="index.html"><span class="brand-mark">◇</span><span class="brand-text">Vault 入门教程<em>从一个个真实需求出发</em></span></a>
+  <div class="topbar-actions">
+    <button class="search-open" id="searchOpen" type="button"><span>搜索</span><kbd>/</kbd></button>
+    <button class="icon-btn" id="themeToggle" aria-label="切换主题">◐</button>
+  </div>
+</header>
+<div class="layout">
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-inner">
+      <p class="sidebar-head">目录</p>
+      <div class="nav-group"><p class="nav-label">开始</p><ul><li><a href="index.html" data-home><span class="nav-num nav-num-dot">•</span><span class="nav-text">前言：从一个个真实需求出发</span></a></li></ul></div>
+<div class="nav-group"><p class="nav-label">基础篇</p><ul><li><a href="ch-01.html"><span class="nav-num">1</span><span class="nav-text">为什么需要 Vault：一个泄露事故的复盘</span></a></li><li><a href="ch-02.html"><span class="nav-num">2</span><span class="nav-text">安装与第一个 Vault：dev 模式</span></a></li><li><a href="ch-03.html"><span class="nav-num">3</span><span class="nav-text">Hello Vault：状态、登录与第一个 secret</span></a></li><li><a href="ch-04.html"><span class="nav-num">4</span><span class="nav-text">KV v2：给密钥加上版本和删除保护</span></a></li></ul></div>
+<div class="nav-group"><p class="nav-label">核心篇</p><ul><li><a href="ch-05.html"><span class="nav-num">5</span><span class="nav-text">策略：把&quot;能读什么&quot;写成代码</span></a></li><li><a href="ch-06.html"><span class="nav-num">6</span><span class="nav-text">拿到密钥的凭证：数据库动态密钥</span></a></li><li><a href="ch-07.html"><span class="nav-num">7</span><span class="nav-text">Token：一切访问的通行证</span></a></li><li><a href="ch-08.html"><span class="nav-num">8</span><span class="nav-text">认证方法：从人到机器</span></a></li><li><a href="ch-09.html" class="active" aria-current="page"><span class="nav-num">9</span><span class="nav-text">Vault Agent：让应用完全不知道 Vault 的存在</span></a></li></ul></div>
+<div class="nav-group"><p class="nav-label">进阶篇</p><ul><li><a href="ch-10.html"><span class="nav-num">10</span><span class="nav-text">Transit：加密即服务</span></a></li><li><a href="ch-11.html"><span class="nav-num">11</span><span class="nav-text">PKI：把证书签发变成一次 API 调用</span></a></li><li><a href="ch-12.html"><span class="nav-num">12</span><span class="nav-text">租约、续期与撤销</span></a></li><li><a href="ch-13.html"><span class="nav-num">13</span><span class="nav-text">审计设备：合规的底线</span></a></li></ul></div>
+<div class="nav-group"><p class="nav-label">生产篇</p><ul><li><a href="ch-14.html"><span class="nav-num">14</span><span class="nav-text">Seal 与 Unseal：Vault 的保险柜逻辑</span></a></li><li><a href="ch-15.html"><span class="nav-num">15</span><span class="nav-text">存储、HA 与备份恢复</span></a></li><li><a href="ch-16.html"><span class="nav-num">16</span><span class="nav-text">生产清单、升级与常见坑</span></a></li><li><a href="ch-17.html"><span class="nav-num">17</span><span class="nav-text">附录：速查表与延伸学习</span></a></li></ul></div>
+      <p class="sidebar-foot">Vault v2.1.1 实测 · 17 章</p>
+    </div>
+  </aside>
+  <div class="scrim" id="scrim" hidden></div>
+  <main id="main" class="content">
+    <article class="prose">
+<h1 id="第-9-章-vault-agent让应用完全不知道-vault-的存在"><a class="anchor" href="#第-9-章-vault-agent让应用完全不知道-vault-的存在" aria-label="链接到此节">#</a>第 9 章 Vault Agent：让应用完全不知道 Vault 的存在</h1>
+<h2 id="需求"><a class="anchor" href="#需求" aria-label="链接到此节">#</a>需求</h2>
+<blockquote><p>我们有 30 个老服务，它们的配置读取方式五花八门：有的读环境变量、有的读 properties 文件、有的读 JSON。让每个团队都去改代码接入 Vault SDK，现实吗？</p>
+<p>更现实的需求是：<strong>应用照旧读本地文件/环境变量，Vault 负责把最新密钥&quot;送到&quot;那个位置，并且自动完成登录、续期、重新渲染。</strong></p></blockquote>
+<p>Vault Agent 就是干这个的：它是一个本地守护进程，负责 <code>auto-auth</code>（自动登录）+ <code>template</code>（把密钥渲染成文件）+ <code>sink</code>（把 token 落盘供本地使用）。</p>
+<h2 id="动手"><a class="anchor" href="#动手" aria-label="链接到此节">#</a>动手</h2>
+<h3 id="91-准备-approle-凭证"><a class="anchor" href="#91-准备-approle-凭证" aria-label="链接到此节">#</a>9.1 准备 AppRole 凭证</h3>
+<p>Agent 需要一个能自动登录的身份。用第 8 章的 AppRole：</p>
+<div class="code-block"><div class="code-head"><span class="code-lang">powershell</span><button class="copy-btn" type="button" data-copy>复制</button></div><pre><code class="language-powershell"><span class="tok-cmd">vault</span> auth enable approle
+<span class="tok-cmd">vault</span> policy write app-read .\app-read.hcl
+<span class="tok-cmd">vault</span> write auth/approle/role/ci-runner `
+  token_policies=app-read `
+  token_ttl=20m `
+  token_max_ttl=1h `
+  secret_id_ttl=10m `
+  secret_id_num_uses=1
+
+<span class="tok-cmd">vault</span> read <span class="tok-flag">-field</span>=role_id auth/approle/role/ci-runner/role-id | <span class="tok-cmd">Set-Content</span> .\agent\role-id <span class="tok-flag">-NoNewline</span>
+<span class="tok-cmd">vault</span> write <span class="tok-flag">-f</span> <span class="tok-flag">-field</span>=secret_id auth/approle/role/ci-runner/secret-id | <span class="tok-cmd">Set-Content</span> .\agent\secret-id <span class="tok-flag">-NoNewline</span></code></pre></div>
+<h3 id="92-写一份-agent-配置"><a class="anchor" href="#92-写一份-agent-配置" aria-label="链接到此节">#</a>9.2 写一份 Agent 配置</h3>
+<div class="code-block"><div class="code-head"><span class="code-lang">hcl</span><button class="copy-btn" type="button" data-copy>复制</button></div><pre><code class="language-hcl"><span class="tok-com"># agent/config.hcl</span>
+<span class="tok-key"><span class="tok-cmd">pid_file</span> =</span> <span class="tok-str">&quot;./pid&quot;</span>
+
+<span class="tok-cmd">auto_auth</span> {
+  <span class="tok-cmd">method</span> <span class="tok-str">&quot;approle&quot;</span> {
+<span class="tok-key">    <span class="tok-cmd">mount_path</span> =</span> <span class="tok-str">&quot;auth/approle&quot;</span>
+<span class="tok-key">    <span class="tok-cmd">config</span> =</span> {
+<span class="tok-key">      role_id_file_path                   =</span> <span class="tok-str">&quot;./role-id&quot;</span>
+<span class="tok-key">      secret_id_file_path                 =</span> <span class="tok-str">&quot;./secret-id&quot;</span>
+<span class="tok-key">      remove_secret_id_file_after_reading =</span> false
+    }
+  }
+
+  <span class="tok-cmd">sink</span> <span class="tok-str">&quot;file&quot;</span> {
+<span class="tok-key">    <span class="tok-cmd">config</span> =</span> {
+<span class="tok-key">      <span class="tok-cmd">path</span> =</span> <span class="tok-str">&quot;./token&quot;</span>
+<span class="tok-key">      mode =</span> 0640
+    }
+  }
+}
+
+<span class="tok-cmd">vault</span> {
+<span class="tok-key">  <span class="tok-cmd">address</span> =</span> <span class="tok-str">&quot;http://127.0.0.1:8200&quot;</span>
+}
+
+<span class="tok-cmd">template</span> {
+<span class="tok-key">  <span class="tok-cmd">destination</span> =</span> <span class="tok-str">&quot;./rendered.env&quot;</span>
+<span class="tok-key">  <span class="tok-cmd">contents</span>    =</span> &lt;&lt;EOT
+{{- with secret <span class="tok-str">&quot;app/data/demo&quot;</span> -}}
+<span class="tok-key">APP_USERNAME=</span>{{ .Data.data.username }}
+<span class="tok-key">APP_PASSWORD=</span>{{ .Data.data.password }}
+{{- end -}}
+EOT
+}</code></pre></div>
+<p>逐一解释：</p>
+<div class="table-wrap"><table><thead><tr><th>配置块</th><th>作用</th></tr></thead><tbody><tr><td><code>auto_auth.method &quot;approle&quot;</code></td><td>Agent 启动后自动用 AppRole 登录换取 token</td></tr><tr><td><code>remove_secret_id_file_after_reading = false</code></td><td>读完 secret_id 后是否删除文件；生产上可设 <code>true</code> 进一步收窄暴露面</td></tr><tr><td><code>sink &quot;file&quot;</code></td><td>把 token 写到本地文件，供其他本地进程（或 Agent 的 API 代理）使用</td></tr><tr><td><code>vault.address</code></td><td>目标 Vault 地址；可用 <code>VAULT_ADDR</code> 覆盖</td></tr><tr><td><code>template</code></td><td>把密钥按 Go template 渲染到 <code>destination</code></td></tr></tbody></table></div>
+<h3 id="93-跑起来并验证"><a class="anchor" href="#93-跑起来并验证" aria-label="链接到此节">#</a>9.3 跑起来并验证</h3>
+<div class="code-block"><div class="code-head"><span class="code-lang">powershell</span><button class="copy-btn" type="button" data-copy>复制</button></div><pre><code class="language-powershell"><span class="tok-cmd">vault</span> agent <span class="tok-flag">-log-level</span>=info <span class="tok-flag">-config</span>=./agent/config.hcl</code></pre></div>
+<blockquote><p><strong>Windows/相对路径的两个实测坑</strong>（都会让 Agent 直接启动失败）：</p>
+<ol><li><strong>flag 必须在位置参数前</strong>，且 <code>-config</code> 建议给绝对路径：
+<code>vault agent -log-level=info -config=C:\path\to\agent\config.hcl</code>
+如果写成 <code>vault agent -config=config.hcl -log-level=info</code>，会报 <code>Command flags must be provided before positional arguments</code>。</li><li><strong>配置里的相对路径是相对于 Agent 进程的工作目录，不是配置文件所在目录</strong>。工作目录不对会看到：
+解决办法：在配置里用绝对路径，或者在正确的目录下启动。<div class="code-block"><div class="code-head"><span class="code-lang">text</span><button class="copy-btn" type="button" data-copy>复制</button></div><pre><code class="language-text">error creating file sink: error during write check: error opening temp file in dir .lab\agent for writing:
+open .lab\agent\token.tmp.51e3a71f: The system cannot find the path specified.</code></pre></div></li></ol></blockquote>
+<p>启动成功后的关键日志：</p>
+<div class="code-block"><div class="code-head"><span class="code-lang">text</span><button class="copy-btn" type="button" data-copy>复制</button></div><pre><code class="language-text">[INFO]  agent.template.server: starting template server
+[INFO]  agent.template.server: template server received new token
+[INFO]  agent: (runner) rendered &quot;(dynamic)&quot; =&gt; &quot;./rendered.env&quot;</code></pre></div>
+<p>渲染产物（实测）：</p>
+<div class="code-block"><div class="code-head"><span class="code-lang">text</span><button class="copy-btn" type="button" data-copy>复制</button></div><pre><code class="language-text">APP_USERNAME=demo
+APP_PASSWORD=s3cr3t</code></pre></div>
+<p>token sink（实测，内容已脱敏）：</p>
+<div class="code-block"><div class="code-head"><span class="code-lang">text</span><button class="copy-btn" type="button" data-copy>复制</button></div><pre><code class="language-text">hvs.CAESII...</code></pre></div>
+<p><strong>至此，应用侧只需要 <code>Get-Content rendered.env</code> 或 <code>source rendered.env</code>，一行代码都不用改。</strong></p>
+<h3 id="94-它有持续工作的能力"><a class="anchor" href="#94-它有持续工作的能力" aria-label="链接到此节">#</a>9.4 它有&quot;持续工作&quot;的能力</h3>
+<p>Agent 不是一次性渲染就结束了，它做三件事：</p>
+<ol><li><strong>续期 token</strong>：token 接近过期时自动 <code>renew</code>（周期 token 场景下可以长期运行）；</li><li><strong>监听密钥变化</strong>：模板里的 secret 一旦版本更新，自动重新渲染文件；</li><li><strong>失败重试</strong>：Vault 短暂不可用时按退避重试，而不是让应用崩掉。</li></ol>
+<p>验证&quot;密钥变化自动重渲染&quot;（Agent 还在运行时执行）：</p>
+<div class="code-block"><div class="code-head"><span class="code-lang">powershell</span><button class="copy-btn" type="button" data-copy>复制</button></div><pre><code class="language-powershell"><span class="tok-cmd">vault</span> kv put <span class="tok-flag">-mount</span>=app demo username=demo password=rotated-by-ops
+Start-Sleep <span class="tok-flag">-Seconds</span> 3
+<span class="tok-cmd">Get-Content</span> .\agent\rendered.env</code></pre></div>
+<div class="code-block"><div class="code-head"><span class="code-lang">text</span><button class="copy-btn" type="button" data-copy>复制</button></div><pre><code class="language-text">APP_USERNAME=demo
+APP_PASSWORD=rotated-by-ops</code></pre></div>
+<p>对&quot;轮换后要平滑生效&quot;的服务，这比&quot;重启才能加载新密码&quot;安全得多。</p>
+<h3 id="95-一次性使用-exit-after-auth"><a class="anchor" href="#95-一次性使用-exit-after-auth" aria-label="链接到此节">#</a>9.5 一次性使用：<code>-exit-after-auth</code></h3>
+<p>CI 里通常只需要&quot;登录并渲染一次&quot;，渲染完就可以退出：</p>
+<div class="code-block"><div class="code-head"><span class="code-lang">bash</span><button class="copy-btn" type="button" data-copy>复制</button></div><pre><code class="language-bash"><span class="tok-cmd">vault</span> agent <span class="tok-flag">-config</span>=agent/config.hcl <span class="tok-flag">-exit-after-auth</span></code></pre></div>
+<p>配合 <code>secret_id_num_uses=1</code>，一次 CI 运行消耗一个一次性凭证，任务结束不留活 token。</p>
+<h3 id="96-作为服务常驻"><a class="anchor" href="#96-作为服务常驻" aria-label="链接到此节">#</a>9.6 作为服务常驻</h3>
+<p>生产上把 Agent 交给 init 系统管理：</p>
+<div class="code-block"><div class="code-head"><span class="code-lang">ini</span><button class="copy-btn" type="button" data-copy>复制</button></div><pre><code class="language-ini"><span class="tok-com"># /etc/systemd/system/vault-agent.service（Linux）</span>
+<span class="tok-key">[Unit]</span>
+<span class="tok-key">Description</span>=Vault Agent
+<span class="tok-key">After</span>=network-online.target
+
+<span class="tok-key">[Service]</span>
+<span class="tok-key">User</span>=app
+<span class="tok-key">Environment</span>=VAULT_ADDR=https://vault.example.internal:8200
+<span class="tok-key">ExecStart</span>=/usr/bin/vault agent -config=/etc/vault-agent/config.hcl
+<span class="tok-key">ExecReload</span>=/bin/kill -HUP $MAINPID
+<span class="tok-key">Restart</span>=on-failure
+
+<span class="tok-key">[Install]</span>
+<span class="tok-key">WantedBy</span>=multi-user.target</code></pre></div>
+<p>Windows 上可以用 <code>sc.exe create</code> 或 NSSM 把同样的命令注册为服务。<strong>注意</strong>：Windows 服务的默认工作目录与交互式终端不同，配置里的所有路径都请写绝对路径。</p>
+<h3 id="97-vault-proxy更透明的一种形态"><a class="anchor" href="#97-vault-proxy更透明的一种形态" aria-label="链接到此节">#</a>9.7 Vault Proxy：更&quot;透明&quot;的一种形态</h3>
+<p><code>vault proxy</code> 是 Agent 的兄弟命令，适合想保留标准 Vault API 但需要本地缓存的场景：</p>
+<div class="code-block"><div class="code-head"><span class="code-lang">bash</span><button class="copy-btn" type="button" data-copy>复制</button></div><pre><code class="language-bash"><span class="tok-cmd">vault</span> proxy <span class="tok-flag">-config</span>=proxy/config.hcl
+<span class="tok-com"># 应用把 VAULT_ADDR 指向 http://127.0.0.1:8100，其余代码不变</span></code></pre></div>
+<p>它可以在本地代答一部分读请求（降低延迟、减轻服务端压力），并统一处理认证。对&quot;客户端不想改代码、但希望走本地代理&quot;的场景更合适。</p>
+<h2 id="原理agent-把最后一公里接上了"><a class="anchor" href="#原理agent-把最后一公里接上了" aria-label="链接到此节">#</a>原理：Agent 把&quot;最后一公里&quot;接上了</h2>
+<div class="code-block"><div class="code-head"><span class="code-lang">text</span><button class="copy-btn" type="button" data-copy>复制</button></div><pre><code class="language-text">                    ┌──────────────────────── Vault 服务端
+                    │
+   Agent 进程 ──────┤ 1. auto_auth：用 AppRole/JWT/K8s 登录 → token
+   (与应用同机)      │ 2. 用 token 读取 secret（app/data/demo）
+                    │ 3. 监听 secret 版本变化
+                    ▼
+   ┌─ sink：把 token 写到文件（给本地工具用）
+   ├─ template：把 secret 渲染成 .env / properties / JSON / 证书文件
+   └─ 完成！应用继续读它的本地文件</code></pre></div>
+<p>这个设计解决了三个现实问题：</p>
+<ol><li><strong>改造量</strong>：应用不需要 Vault SDK，甚至不需要知道 Vault 存在；</li><li><strong>凭据最小化</strong>：AppRole 的 <code>secret_id</code> 只落在 Agent 的配置文件里（且可设为读完即删），应用拿到的是渲染后的文件；</li><li><strong>轮换自动化</strong>：密钥更新 → 文件更新 → 应用重载，整条链自动。</li></ol>
+<h2 id="踩坑与检查清单"><a class="anchor" href="#踩坑与检查清单" aria-label="链接到此节">#</a>踩坑与检查清单</h2>
+<ul><li><strong>路径问题排第一</strong>：配置里一律用绝对路径，或用 <code>-config</code> 指定绝对路径并在正确的 cwd 下启动。</li><li><strong>文件权限要收紧</strong>：<code>sink</code> 的 <code>mode = 0640</code> 只是起点；在 Linux 上确保文件属主是应用用户，在 Windows 上检查 ACL。</li><li><strong>模板语法用 Go template</strong>：<code>{{ .Data.data.username }}</code> 中的 <code>.Data.data</code> 是 KV v2 的嵌套结构（<code>data</code> 里还有 <code>data</code>），写错不会报错，只会渲染出空值。</li><li><strong>template 默认会&quot;等待依赖就绪&quot;</strong>：依赖的 secret 不存在时 Agent 会重试而不是退出，排查时看日志里的 render 失败信息。</li><li><strong><code>secret_id</code> 文件用 <code>-f</code> 覆盖前先确认权限</strong>：临时文件不要落在共享目录。</li><li><strong>不要把 rendered 文件放到 docker 镜像层里</strong>：它包含明文密钥，应该在启动时挂卷渲染。</li><li><strong>Agent 不是&quot;密钥分发中心&quot;</strong>：它只是同机的一个客户端。跨主机的密钥投递仍然要靠 Vault 本身（各主机各自跑 Agent）。</li></ul>
+<p>到这里，应用侧就绪了。下一章我们把 Vault 当成&quot;加密机&quot;来用，让<strong>数据在数据库里也是密文</strong>。</p>
+    </article>
+    <nav class="pager">
+    <a class="pager-prev" href="ch-08.html"><span>上一章</span><strong>第 8 章 认证方法：从人到机器</strong></a>
+    <a class="pager-next" href="ch-10.html"><span>下一章</span><strong>第 10 章 Transit：加密即服务</strong></a>
+  </nav>
+    <footer class="site-foot">
+      <p>本页内容源自本仓库 Markdown 源文件；全部命令在 HashiCorp Vault v2.1.1 上实测。</p>
+      <p>生产环境请以 <a href="https://developer.hashicorp.com/vault/docs" rel="noopener">官方文档</a> 为准。</p>
+    </footer>
+  </main>
+  <div class="toc-rail"><nav class="toc" aria-label="本页目录"><p class="toc-title">本页目录</p><ul><li class="toc-l2"><a href="#需求">需求</a></li><li class="toc-l2"><a href="#动手">动手</a></li><li class="toc-l3"><a href="#91-准备-approle-凭证">9.1 准备 AppRole 凭证</a></li><li class="toc-l3"><a href="#92-写一份-agent-配置">9.2 写一份 Agent 配置</a></li><li class="toc-l3"><a href="#93-跑起来并验证">9.3 跑起来并验证</a></li><li class="toc-l3"><a href="#94-它有持续工作的能力">9.4 它有&quot;持续工作&quot;的能力</a></li><li class="toc-l3"><a href="#95-一次性使用-exit-after-auth">9.5 一次性使用：-exit-after-auth</a></li><li class="toc-l3"><a href="#96-作为服务常驻">9.6 作为服务常驻</a></li><li class="toc-l3"><a href="#97-vault-proxy更透明的一种形态">9.7 Vault Proxy：更&quot;透明&quot;的一种形态</a></li><li class="toc-l2"><a href="#原理agent-把最后一公里接上了">原理：Agent 把&quot;最后一公里&quot;接上了</a></li><li class="toc-l2"><a href="#踩坑与检查清单">踩坑与检查清单</a></li></ul></nav></div>
+</div>
+<div class="search-modal" id="searchModal" hidden>
+  <div class="search-box" role="dialog" aria-modal="true" aria-label="站内搜索">
+    <input id="searchInput" type="search" placeholder="搜索章节、命令、报错信息…（支持多个关键词，空格分隔）" autocomplete="off">
+    <button class="icon-btn" id="searchClose" aria-label="关闭搜索">✕</button>
+  </div>
+  <div class="search-results" id="searchResults"><p class="search-hint">输入关键词开始搜索，例如：动态密钥 / AppRole / sealed / check-and-set</p></div>
+</div>
+<script src="assets/app.js" defer></script>
+</body>
+</html>

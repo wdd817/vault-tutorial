@@ -1,0 +1,19 @@
+{
+  "name": "vault-tutorial",
+  "version": "1.0.0",
+  "private": true,
+  "description": "HashiCorp Vault 中文入门教程（GitBook 源文件 + 零依赖静态站点打包器）",
+  "type": "module",
+  "scripts": {
+    "build": "node tools/build-web.mjs",
+    "verify": "node tools/verify-web.mjs",
+    "check": "node tools/build-web.mjs && node tools/verify-web.mjs",
+    "serve": "node tools/serve.mjs",
+    "pack": "node tools/pack.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": ["vault", "hashicorp", "tutorial", "gitbook", "chinese"],
+  "license": "CC-BY-4.0"
+}

@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="zh-CN" data-page="ch-11">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>第 11 章 PKI：把证书签发变成一次 API 调用 · Vault 入门教程</title>
+<meta name="description" content="第 11 章 PKI：把证书签发变成一次 API 调用 需求 内网服务之间要上 TLS，但现状是： 证书靠人手动申请， 有效期一年，到期前没人记得换 ，出过两次线上事故； 私钥在邮件里传过； 想上 mTLS（双向认证）时，发现根本没有统一的 CA 可以信任。 目标： 任何服务都能在启动时自己申请一张">
+<meta name="generator" content="vault-tutorial static builder">
+<meta property="og:title" content="第 11 章 PKI：把证书签发变成一次 API 调用 · Vault 入门教程">
+<meta property="og:type" content="article">
+<link rel="stylesheet" href="assets/style.css">
+<link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+<script>(function(){try{var t=localStorage.getItem('vt-theme');if(!t){t=window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light';}document.documentElement.dataset.theme=t;}catch(e){}})();</script>
+</head>
+<body>
+<a class="skip" href="#main">跳到正文</a>
+<header class="topbar">
+  <button class="icon-btn" id="navToggle" aria-label="切换目录" aria-expanded="false">☰</button>
+  <a class="brand" href="index.html"><span class="brand-mark">◇</span><span class="brand-text">Vault 入门教程<em>从一个个真实需求出发</em></span></a>
+  <div class="topbar-actions">
+    <button class="search-open" id="searchOpen" type="button"><span>搜索</span><kbd>/</kbd></button>
+    <button class="icon-btn" id="themeToggle" aria-label="切换主题">◐</button>
+  </div>
+</header>
+<div class="layout">
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-inner">
+      <p class="sidebar-head">目录</p>
+      <div class="nav-group"><p class="nav-label">开始</p><ul><li><a href="index.html" data-home><span class="nav-num nav-num-dot">•</span><span class="nav-text">前言：从一个个真实需求出发</span></a></li></ul></div>
+<div class="nav-group"><p class="nav-label">基础篇</p><ul><li><a href="ch-01.html"><span class="nav-num">1</span><span class="nav-text">为什么需要 Vault：一个泄露事故的复盘</span></a></li><li><a href="ch-02.html"><span class="nav-num">2</span><span class="nav-text">安装与第一个 Vault：dev 模式</span></a></li><li><a href="ch-03.html"><span class="nav-num">3</span><span class="nav-text">Hello Vault：状态、登录与第一个 secret</span></a></li><li><a href="ch-04.html"><span class="nav-num">4</span><span class="nav-text">KV v2：给密钥加上版本和删除保护</span></a></li></ul></div>
+<div class="nav-group"><p class="nav-label">核心篇</p><ul><li><a href="ch-05.html"><span class="nav-num">5</span><span class="nav-text">策略：把&quot;能读什么&quot;写成代码</span></a></li><li><a href="ch-06.html"><span class="nav-num">6</span><span class="nav-text">拿到密钥的凭证：数据库动态密钥</span></a></li><li><a href="ch-07.html"><span class="nav-num">7</span><span class="nav-text">Token：一切访问的通行证</span></a></li><li><a href="ch-08.html"><span class="nav-num">8</span><span class="nav-text">认证方法：从人到机器</span></a></li><li><a href="ch-09.html"><span class="nav-num">9</span><span class="nav-text">Vault Agent：让应用完全不知道 Vault 的存在</span></a></li></ul></div>
+<div class="nav-group"><p class="nav-label">进阶篇</p><ul><li><a href="ch-10.html"><span class="nav-num">10</span><span class="nav-text">Transit：加密即服务</span></a></li><li><a href="ch-11.html" class="active" aria-current="page"><span class="nav-num">11</span><span class="nav-text">PKI：把证书签发变成一次 API 调用</span></a></li><li><a href="ch-12.html"><span class="nav-num">12</span><span class="nav-text">租约、续期与撤销</span></a></li><li><a href="ch-13.html"><span class="nav-num">13</span><span class="nav-text">审计设备：合规的底线</span></a></li></ul></div>
+<div class="nav-group"><p class="nav-label">生产篇</p><ul><li><a href="ch-14.html"><span class="nav-num">14</span><span class="nav-text">Seal 与 Unseal：Vault 的保险柜逻辑</span></a></li><li><a href="ch-15.html"><span class="nav-num">15</span><span class="nav-text">存储、HA 与备份恢复</span></a></li><li><a href="ch-16.html"><span class="nav-num">16</span><span class="nav-text">生产清单、升级与常见坑</span></a></li><li><a href="ch-17.html"><span class="nav-num">17</span><span class="nav-text">附录：速查表与延伸学习</span></a></li></ul></div>
+      <p class="sidebar-foot">Vault v2.1.1 实测 · 17 章</p>
+    </div>
+  </aside>
+  <div class="scrim" id="scrim" hidden></div>
+  <main id="main" class="content">
+    <article class="prose">
+<h1 id="第-11-章-pki把证书签发变成一次-api-调用"><a class="anchor" href="#第-11-章-pki把证书签发变成一次-api-调用" aria-label="链接到此节">#</a>第 11 章 PKI：把证书签发变成一次 API 调用</h1>
+<h2 id="需求"><a class="anchor" href="#需求" aria-label="链接到此节">#</a>需求</h2>
+<blockquote><p>内网服务之间要上 TLS，但现状是：</p>
+<ul><li>证书靠人手动申请，<strong>有效期一年，到期前没人记得换</strong>，出过两次线上事故；</li><li>私钥在邮件里传过；</li><li>想上 mTLS（双向认证）时，发现根本没有统一的 CA 可以信任。</li></ul>
+<p>目标：<strong>任何服务都能在启动时自己申请一张 24 小时有效的证书，到期自动续，人不用参与。</strong></p></blockquote>
+<p>Vault 的 PKI 引擎是一个<strong>内置的 CA</strong>：它签发、吊销证书，并对外提供 CRL。</p>
+<h2 id="动手"><a class="anchor" href="#动手" aria-label="链接到此节">#</a>动手</h2>
+<h3 id="111-生成根-ca"><a class="anchor" href="#111-生成根-ca" aria-label="链接到此节">#</a>11.1 生成根 CA</h3>
+<div class="code-block"><div class="code-head"><span class="code-lang">powershell</span><button class="copy-btn" type="button" data-copy>复制</button></div><pre><code class="language-powershell"><span class="tok-cmd">vault</span> secrets enable pki
+<span class="tok-cmd">vault</span> secrets tune <span class="tok-flag">-max-lease-ttl</span>=87600h pki      <span class="tok-com"># 10 年</span>
+<span class="tok-cmd">vault</span> write pki/root/generate/internal `
+  common_name=<span class="tok-str">&quot;example.internal Root CA&quot;</span> `
+  ttl=87600h</code></pre></div>
+<div class="code-block"><div class="code-head"><span class="code-lang">text</span><button class="copy-btn" type="button" data-copy>复制</button></div><pre><code class="language-text">Key              Value
+---              -----
+certificate      -----BEGIN CERTIFICATE-----
+MIIDNzCCAh+gAwIBAgIUUMYa8XE6SZfCBRmQMI0xVZkQCfIwDQYJKoZIhvcNAQEL
+...
+-----END CERTIFICATE-----
+expiration       2105525234
+issuer_id        8e340a0b-fcdb-df78-f5da-6412d1045770
+serial_number    50:c6:1a:f1:71:3a:49:97:c2:05:19:90:30:8d:31:55:99:10:09:f2</code></pre></div>
+<p>记住三条：</p>
+<ul><li><code>secrets tune -max-lease-ttl</code> 必须<strong>大于等于</strong>证书 TTL，否则签发时会报&quot;超出了挂载点的 max_lease_ttl&quot;；</li><li>根 CA 的私钥由 Vault 保管（<code>exportable</code> 默认 false）；</li><li>生产上更常见的做法是<strong>根 CA 离线</strong>，Vault 里只放中间 CA（见 11.6）。</li></ul>
+<h3 id="112-定义签发角色"><a class="anchor" href="#112-定义签发角色" aria-label="链接到此节">#</a>11.2 定义签发角色</h3>
+<p>角色决定&quot;能签什么证书&quot;：</p>
+<div class="code-block"><div class="code-head"><span class="code-lang">powershell</span><button class="copy-btn" type="button" data-copy>复制</button></div><pre><code class="language-powershell"><span class="tok-cmd">vault</span> write pki/roles/web-server `
+  allowed_domains=<span class="tok-str">&quot;example.internal&quot;</span> `
+  allow_subdomains=true `
+  max_ttl=720h `
+  key_type=rsa `
+  key_bits=2048</code></pre></div>
+<div class="code-block"><div class="code-head"><span class="code-lang">text</span><button class="copy-btn" type="button" data-copy>复制</button></div><pre><code class="language-text">Success! Data written to: pki/roles/web-server</code></pre></div>
+<p>关键字段（<code>vault read pki/roles/web-server</code> 实测）：</p>
+<div class="table-wrap"><table><thead><tr><th>字段</th><th>含义</th></tr></thead><tbody><tr><td><code>allowed_domains</code></td><td>允许签发的域名白名单（<strong>最重要的安全边界</strong>）</td></tr><tr><td><code>allow_subdomains</code></td><td>是否允许 <code>*.example.internal</code> 这类子域</td></tr><tr><td><code>allow_bare_domains</code></td><td>是否允许签发裸域 <code>example.internal</code></td></tr><tr><td><code>allow_ip_sans</code></td><td>是否允许把 IP 放进 SAN</td></tr><tr><td><code>max_ttl</code></td><td>单张证书的 TTL 上限</td></tr><tr><td><code>key_type</code> / <code>key_bits</code></td><td>密钥算法（rsa/ecdsa/ed25519）</td></tr><tr><td><code>require_cn</code></td><td>是否强制 CN</td></tr><tr><td><code>enforce_hostnames</code></td><td>是否校验 CN 必须是合法主机名</td></tr></tbody></table></div>
+<h3 id="113-签发一张证书"><a class="anchor" href="#113-签发一张证书" aria-label="链接到此节">#</a>11.3 签发一张证书</h3>
+<div class="code-block"><div class="code-head"><span class="code-lang">powershell</span><button class="copy-btn" type="button" data-copy>复制</button></div><pre><code class="language-powershell"><span class="tok-cmd">vault</span> write pki/issue/web-server common_name=<span class="tok-str">&quot;api.example.internal&quot;</span> ttl=24h</code></pre></div>
+<p>返回里有 <code>certificate</code>、<code>private_key</code>、<code>ca_chain</code>、<code>serial_number</code>、<code>expiration</code>。用 JSON 格式便于脚本处理：</p>
+<div class="code-block"><div class="code-head"><span class="code-lang">powershell</span><button class="copy-btn" type="button" data-copy>复制</button></div><pre><code class="language-powershell"><span class="tok-var">$cert</span> = (<span class="tok-cmd">vault</span> write <span class="tok-flag">-format</span>=json pki/issue/web-server common_name=<span class="tok-str">&quot;web.example.internal&quot;</span> ttl=24h | <span class="tok-cmd">ConvertFrom-Json</span>).data
+<span class="tok-var">$cert</span>.serial_number      <span class="tok-com"># 15:c6:77:c6:0d:33:53:04:...</span>
+<span class="tok-var">$cert</span>.ca_chain.Count     <span class="tok-com"># 1（本例是自签根，直接签叶子）</span>
+<span class="tok-var">$cert</span>.private_key_type   <span class="tok-com"># rsa</span>
+
+<span class="tok-var">$cert</span>.certificate | <span class="tok-cmd">Set-Content</span> .\web.crt <span class="tok-flag">-Encoding</span> ascii
+<span class="tok-var">$cert</span>.private_key | <span class="tok-cmd">Set-Content</span> .\web.key <span class="tok-flag">-Encoding</span> ascii</code></pre></div>
+<blockquote><p><strong>Windows 提示</strong>：用 <code>Set-Content -Encoding ascii</code> 写出的 PEM 是 CRLF 换行，多数工具能接受；如果某个工具报&quot;格式错误&quot;，把文件转成 LF 再试。</p></blockquote>
+<h3 id="114-吊销与-crl"><a class="anchor" href="#114-吊销与-crl" aria-label="链接到此节">#</a>11.4 吊销与 CRL</h3>
+<p>按序列号吊销：</p>
+<div class="code-block"><div class="code-head"><span class="code-lang">powershell</span><button class="copy-btn" type="button" data-copy>复制</button></div><pre><code class="language-powershell"><span class="tok-cmd">vault</span> write pki/revoke serial_number=$(<span class="tok-var">$cert</span>.serial_number)</code></pre></div>
+<div class="code-block"><div class="code-head"><span class="code-lang">text</span><button class="copy-btn" type="button" data-copy>复制</button></div><pre><code class="language-text">Key                        Value
+---                        -----
+revocation_time            1790165235
+revocation_time_rfc3339    2026-09-23T12:17:08.3159029Z
+state                      revoked</code></pre></div>
+<p>下载 CRL（供下游服务校验吊销状态）：</p>
+<div class="code-block"><div class="code-head"><span class="code-lang">powershell</span><button class="copy-btn" type="button" data-copy>复制</button></div><pre><code class="language-powershell"><span class="tok-cmd">vault</span> read <span class="tok-flag">-field</span>=certificate pki/cert/crl | <span class="tok-cmd">Set-Content</span> .\crl.pem <span class="tok-flag">-Encoding</span> ascii</code></pre></div>
+<blockquote><p>注意是 <strong><code>pki/cert/crl</code></strong>（PEM 格式的 CRL）。<code>vault read pki/crl/pem</code> 这种写法在 CLI 里会被当成数字比较而报错（<code>invalid character '-' in numeric literal</code>）。</p></blockquote>
+<p>配置 AIA / CRL 分发点，让下游能自动找到吊销列表：</p>
+<div class="code-block"><div class="code-head"><span class="code-lang">powershell</span><button class="copy-btn" type="button" data-copy>复制</button></div><pre><code class="language-powershell"><span class="tok-cmd">vault</span> write pki/config/urls `
+  issuing_certificates=<span class="tok-str">&quot;http://127.0.0.1:8200/v1/pki/ca&quot;</span> `
+  crl_distribution_points=<span class="tok-str">&quot;http://127.0.0.1:8200/v1/pki/crl&quot;</span></code></pre></div>
+<blockquote><p>不配这个会收到警告（实测）：</p>
+<div class="code-block"><div class="code-head"><span class="code-lang">text</span><button class="copy-btn" type="button" data-copy>复制</button></div><pre><code class="language-text">WARNING! The following warnings were returned from Vault:
+* This mount hasn't configured any authority information access (AIA) fields;
+  this may make it harder for systems to find missing certificates in the chain
+  or to validate revocation status of certificates.</code></pre></div></blockquote>
+<h3 id="115-域名越权会被拦下"><a class="anchor" href="#115-域名越权会被拦下" aria-label="链接到此节">#</a>11.5 域名越权会被拦下</h3>
+<div class="code-block"><div class="code-head"><span class="code-lang">powershell</span><button class="copy-btn" type="button" data-copy>复制</button></div><pre><code class="language-powershell"><span class="tok-cmd">vault</span> write pki/issue/web-server common_name=<span class="tok-str">&quot;evil.example.com&quot;</span> ttl=24h</code></pre></div>
+<div class="code-block"><div class="code-head"><span class="code-lang">text</span><button class="copy-btn" type="button" data-copy>复制</button></div><pre><code class="language-text">Error writing data to pki/issue/web-server: Error making API request.
+Code: 400. Errors:
+
+* common name evil.example.com not allowed by this role</code></pre></div>
+<p>这就是 <code>allowed_domains</code> 的价值：<strong>没有它，任何能调用 <code>pki/issue/*</code> 的服务都能给自己签一张任意域名的证书。</strong></p>
+<h3 id="116-生产架构根-ca-离线-中间-ca"><a class="anchor" href="#116-生产架构根-ca-离线-中间-ca" aria-label="链接到此节">#</a>11.6 生产架构：根 CA 离线 + 中间 CA</h3>
+<p>不要用根 CA 直接签叶子证书。推荐做法：</p>
+<div class="code-block"><div class="code-head"><span class="code-lang">text</span><button class="copy-btn" type="button" data-copy>复制</button></div><pre><code class="language-text">① 离线机器上生成根 CA（或用企业 PKI / HSM）
+② 在 Vault 里生成 CSR：
+     vault write -field=csr pki/intermediate/generate/internal common_name=&quot;example.internal Intermediate CA&quot; &gt; int.csr
+③ 用根 CA 签这个 CSR（离线操作），得到 intermediate CA 证书
+④ 把证书导入 Vault：
+     vault write pki/intermediate/set-signed certificate=@int.pem
+⑤ 之后所有签发都由中间 CA 完成；根 CA 私钥永远不联网</code></pre></div>
+<p>这样即使 Vault 被攻破，攻击者也只能用中间 CA 签证书，而<strong>根 CA 可以在不重建整个信任链的前提下吊销它</strong>。</p>
+<h3 id="117-角色的最小权限给能签发的调用方一份策略"><a class="anchor" href="#117-角色的最小权限给能签发的调用方一份策略" aria-label="链接到此节">#</a>11.7 角色的最小权限：给&quot;能签发&quot;的调用方一份策略</h3>
+<div class="code-block"><div class="code-head"><span class="code-lang">hcl</span><button class="copy-btn" type="button" data-copy>复制</button></div><pre><code class="language-hcl"><span class="tok-com"># pki-issuer.hcl</span>
+<span class="tok-cmd">path</span> <span class="tok-str">&quot;pki/issue/web-server&quot;</span> {
+<span class="tok-key">  <span class="tok-cmd">capabilities</span> =</span> [<span class="tok-str">&quot;update&quot;</span>]
+}</code></pre></div>
+<div class="code-block"><div class="code-head"><span class="code-lang">powershell</span><button class="copy-btn" type="button" data-copy>复制</button></div><pre><code class="language-powershell"><span class="tok-cmd">vault</span> policy write pki-issuer .\pki-issuer.hcl</code></pre></div>
+<p>应用侧只需要这一条。<strong>绝对不要</strong>把 <code>pki/root/*</code>、<code>pki/roles/*</code>、<code>pki/intermediate/*</code> 给业务服务。</p>
+<h3 id="118-结合-agent-做自动续期"><a class="anchor" href="#118-结合-agent-做自动续期" aria-label="链接到此节">#</a>11.8 结合 Agent 做自动续期</h3>
+<p>把&quot;签发&quot;和&quot;落地成文件&quot;合起来，就是完整的自动证书方案：</p>
+<div class="code-block"><div class="code-head"><span class="code-lang">hcl</span><button class="copy-btn" type="button" data-copy>复制</button></div><pre><code class="language-hcl"><span class="tok-cmd">template</span> {
+<span class="tok-key">  <span class="tok-cmd">destination</span> =</span> <span class="tok-str">&quot;/etc/nginx/tls/server.pem&quot;</span>
+<span class="tok-key">  <span class="tok-cmd">contents</span> =</span> &lt;&lt;EOT
+{{- with pkiCert <span class="tok-str">&quot;pki/issue/web-server&quot;</span> <span class="tok-str">&quot;common_name=svc.example.internal&quot;</span> <span class="tok-str">&quot;ttl=24h&quot;</span> -}}
+{{ .Cert }}
+{{ .CA }}
+{{- end -}}
+EOT
+}</code></pre></div>
+<p>实测（Vault 2.1.1）渲染出的 <code>server.pem</code> 里包含 <strong>2 个 <code>BEGIN CERTIFICATE</code> 块</strong>：第一个是叶子证书，第二个是 CA（可以直接作为 nginx 的 <code>ssl_certificate</code> 使用，因为 nginx 要求&quot;叶子 + 链&quot;在同一个文件里）。日志里能看到：</p>
+<div class="code-block"><div class="code-head"><span class="code-lang">text</span><button class="copy-btn" type="button" data-copy>复制</button></div><pre><code class="language-text">[INFO]  agent: (runner) rendered &quot;(dynamic)&quot; =&gt; &quot;/etc/nginx/tls/server.pem&quot;</code></pre></div>
+<p>Agent 会在证书接近过期时<strong>自动重新签发并重写文件</strong>，配合 <code>nginx -s reload</code> 就能做到&quot;证书永不过期&quot;。</p>
+<blockquote><p><strong>权限提醒（实测踩坑）</strong>：渲染 <code>pkiCert</code> 的那个身份必须拥有 <code>pki/issue/web-server</code> 的 <code>update</code> 权限。如果它只有第 5 章的 <code>app-read</code>，Agent 会一直报：</p>
+<div class="code-block"><div class="code-head"><span class="code-lang">text</span><button class="copy-btn" type="button" data-copy>复制</button></div><pre><code class="language-text">[WARN] agent: (view) vault.pki(pki/issue/web-server-&gt;...): Error making API request.
+URL: PUT http://127.0.0.1:8200/v1/pki/issue/web-server
+Code: 403. Errors:
+* permission denied</code></pre></div>
+<p>正确做法是给这个角色同时挂上&quot;读配置&quot;和&quot;签发证书&quot;两个策略，例如：</p>
+<div class="code-block"><div class="code-head"><span class="code-lang">powershell</span><button class="copy-btn" type="button" data-copy>复制</button></div><pre><code class="language-powershell"><span class="tok-cmd">vault</span> write auth/approle/role/nginx-agent `
+  token_policies=<span class="tok-str">&quot;app-read,pki-issuer&quot;</span> `
+  token_ttl=20m token_max_ttl=1h</code></pre></div></blockquote>
+<h2 id="原理pki-把证书生命周期变成了状态机"><a class="anchor" href="#原理pki-把证书生命周期变成了状态机" aria-label="链接到此节">#</a>原理：PKI 把&quot;证书生命周期&quot;变成了状态机</h2>
+<div class="code-block"><div class="code-head"><span class="code-lang">text</span><button class="copy-btn" type="button" data-copy>复制</button></div><pre><code class="language-text">                  ┌─ root/generate ──▶ 根 CA（离线）
+                  ├─ intermediate/generate + set-signed ──▶ 中间 CA
+                  ├─ roles/&lt;name&gt; ───▶ 签发规则（域名/TTL/算法）
+                  ├─ issue/&lt;role&gt; ───▶ 签发（返回 cert + key + chain）
+                  ├─ sign/&lt;role&gt; ────▶ 用已有 CSR 签发（更安全：私钥不经过 Vault）
+                  ├─ revoke ─────────▶ 吊销（按 serial 或证书内容）
+                  └─ cert/crl ───────▶ 分发吊销列表</code></pre></div>
+<p>两个工程上的重要选择：</p>
+<div class="table-wrap"><table><thead><tr><th>方式</th><th>私钥在哪生成</th><th>适用</th></tr></thead><tbody><tr><td><code>pki/issue/&lt;role&gt;</code></td><td>Vault 生成，返回给调用方</td><td>简单、常见；返回报文里含私钥</td></tr><tr><td><code>pki/sign/&lt;role&gt;</code></td><td><strong>调用方本地生成</strong>，只把 CSR 给 Vault</td><td>私钥永不经过网络，安全性更高</td></tr></tbody></table></div>
+<p>对安全要求高的场景优先用 <code>sign</code>（Vault 只签发，不接触私钥）。</p>
+<h2 id="踩坑与检查清单"><a class="anchor" href="#踩坑与检查清单" aria-label="链接到此节">#</a>踩坑与检查清单</h2>
+<ul><li><strong><code>secrets tune -max-lease-ttl</code> 忘了调</strong>，签发长有效期证书会失败。</li><li><strong><code>allowed_domains</code> 必须写</strong>，否则等于开放了一个任意域名 CA。</li><li><strong><code>allow_bare_domains</code> / <code>allow_subdomains</code> 的默认值</strong>要确认清楚：只写 <code>allowed_domains</code> 时，裸域默认是<strong>不允许</strong>的。</li><li><strong>CRL 路径是 <code>pki/cert/crl</code></strong>，不是 <code>pki/crl/pem</code>。</li><li><strong>吊销需要知道证书内容</strong>：按 <code>serial_number</code> 最方便，所以<strong>签发时把 serial 记进配置管理</strong>（否则只能事后扫 CRL）。</li><li><strong>默认 <code>no_store=false</code> 会把所有签发记录存在 Vault 里</strong>，量大时要注意存储增长；不需要追溯可以设 <code>no_store=true</code>（代价是无法吊销）。</li><li><strong>TTL 要短。</strong> PKI + Agent 的组合就是为了实现&quot;24 小时证书&quot;，别又签成一年。</li><li><strong>生产环境把根 CA 留在线下</strong>，Vault 只做中间 CA。</li></ul>
+<p>下一章处理一个贯穿全书但一直没正面讲的概念：<strong>租约</strong>——它决定了&quot;动态密钥什么时候被收回&quot;。</p>
+    </article>
+    <nav class="pager">
+    <a class="pager-prev" href="ch-10.html"><span>上一章</span><strong>第 10 章 Transit：加密即服务</strong></a>
+    <a class="pager-next" href="ch-12.html"><span>下一章</span><strong>第 12 章 租约、续期与撤销</strong></a>
+  </nav>
+    <footer class="site-foot">
+      <p>本页内容源自本仓库 Markdown 源文件；全部命令在 HashiCorp Vault v2.1.1 上实测。</p>
+      <p>生产环境请以 <a href="https://developer.hashicorp.com/vault/docs" rel="noopener">官方文档</a> 为准。</p>
+    </footer>
+  </main>
+  <div class="toc-rail"><nav class="toc" aria-label="本页目录"><p class="toc-title">本页目录</p><ul><li class="toc-l2"><a href="#需求">需求</a></li><li class="toc-l2"><a href="#动手">动手</a></li><li class="toc-l3"><a href="#111-生成根-ca">11.1 生成根 CA</a></li><li class="toc-l3"><a href="#112-定义签发角色">11.2 定义签发角色</a></li><li class="toc-l3"><a href="#113-签发一张证书">11.3 签发一张证书</a></li><li class="toc-l3"><a href="#114-吊销与-crl">11.4 吊销与 CRL</a></li><li class="toc-l3"><a href="#115-域名越权会被拦下">11.5 域名越权会被拦下</a></li><li class="toc-l3"><a href="#116-生产架构根-ca-离线-中间-ca">11.6 生产架构：根 CA 离线 + 中间 CA</a></li><li class="toc-l3"><a href="#117-角色的最小权限给能签发的调用方一份策略">11.7 角色的最小权限：给&quot;能签发&quot;的调用方一份策略</a></li><li class="toc-l3"><a href="#118-结合-agent-做自动续期">11.8 结合 Agent 做自动续期</a></li><li class="toc-l2"><a href="#原理pki-把证书生命周期变成了状态机">原理：PKI 把&quot;证书生命周期&quot;变成了状态机</a></li><li class="toc-l2"><a href="#踩坑与检查清单">踩坑与检查清单</a></li></ul></nav></div>
+</div>
+<div class="search-modal" id="searchModal" hidden>
+  <div class="search-box" role="dialog" aria-modal="true" aria-label="站内搜索">
+    <input id="searchInput" type="search" placeholder="搜索章节、命令、报错信息…（支持多个关键词，空格分隔）" autocomplete="off">
+    <button class="icon-btn" id="searchClose" aria-label="关闭搜索">✕</button>
+  </div>
+  <div class="search-results" id="searchResults"><p class="search-hint">输入关键词开始搜索，例如：动态密钥 / AppRole / sealed / check-and-set</p></div>
+</div>
+<script src="assets/app.js" defer></script>
+</body>
+</html>

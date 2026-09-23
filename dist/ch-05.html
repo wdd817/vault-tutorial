@@ -1,0 +1,230 @@
+<!doctype html>
+<html lang="zh-CN" data-page="ch-05">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>第 5 章 策略：把&quot;能读什么&quot;写成代码 · Vault 入门教程</title>
+<meta name="description" content="第 5 章 策略：把 能读什么 写成代码 需求 北极星电商现在有四类消费者，要求各不相同： 谁 要求 alice （应用开发） 只能读 app/data/demo ，不能读生产库密码 订单服务 能读自己的配置，能列目录（便于排查），但不能写 CI 流水线 能在自己的前缀下建/改/删密钥，但碰不到别人">
+<meta name="generator" content="vault-tutorial static builder">
+<meta property="og:title" content="第 5 章 策略：把&quot;能读什么&quot;写成代码 · Vault 入门教程">
+<meta property="og:type" content="article">
+<link rel="stylesheet" href="assets/style.css">
+<link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+<script>(function(){try{var t=localStorage.getItem('vt-theme');if(!t){t=window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light';}document.documentElement.dataset.theme=t;}catch(e){}})();</script>
+</head>
+<body>
+<a class="skip" href="#main">跳到正文</a>
+<header class="topbar">
+  <button class="icon-btn" id="navToggle" aria-label="切换目录" aria-expanded="false">☰</button>
+  <a class="brand" href="index.html"><span class="brand-mark">◇</span><span class="brand-text">Vault 入门教程<em>从一个个真实需求出发</em></span></a>
+  <div class="topbar-actions">
+    <button class="search-open" id="searchOpen" type="button"><span>搜索</span><kbd>/</kbd></button>
+    <button class="icon-btn" id="themeToggle" aria-label="切换主题">◐</button>
+  </div>
+</header>
+<div class="layout">
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-inner">
+      <p class="sidebar-head">目录</p>
+      <div class="nav-group"><p class="nav-label">开始</p><ul><li><a href="index.html" data-home><span class="nav-num nav-num-dot">•</span><span class="nav-text">前言：从一个个真实需求出发</span></a></li></ul></div>
+<div class="nav-group"><p class="nav-label">基础篇</p><ul><li><a href="ch-01.html"><span class="nav-num">1</span><span class="nav-text">为什么需要 Vault：一个泄露事故的复盘</span></a></li><li><a href="ch-02.html"><span class="nav-num">2</span><span class="nav-text">安装与第一个 Vault：dev 模式</span></a></li><li><a href="ch-03.html"><span class="nav-num">3</span><span class="nav-text">Hello Vault：状态、登录与第一个 secret</span></a></li><li><a href="ch-04.html"><span class="nav-num">4</span><span class="nav-text">KV v2：给密钥加上版本和删除保护</span></a></li></ul></div>
+<div class="nav-group"><p class="nav-label">核心篇</p><ul><li><a href="ch-05.html" class="active" aria-current="page"><span class="nav-num">5</span><span class="nav-text">策略：把&quot;能读什么&quot;写成代码</span></a></li><li><a href="ch-06.html"><span class="nav-num">6</span><span class="nav-text">拿到密钥的凭证：数据库动态密钥</span></a></li><li><a href="ch-07.html"><span class="nav-num">7</span><span class="nav-text">Token：一切访问的通行证</span></a></li><li><a href="ch-08.html"><span class="nav-num">8</span><span class="nav-text">认证方法：从人到机器</span></a></li><li><a href="ch-09.html"><span class="nav-num">9</span><span class="nav-text">Vault Agent：让应用完全不知道 Vault 的存在</span></a></li></ul></div>
+<div class="nav-group"><p class="nav-label">进阶篇</p><ul><li><a href="ch-10.html"><span class="nav-num">10</span><span class="nav-text">Transit：加密即服务</span></a></li><li><a href="ch-11.html"><span class="nav-num">11</span><span class="nav-text">PKI：把证书签发变成一次 API 调用</span></a></li><li><a href="ch-12.html"><span class="nav-num">12</span><span class="nav-text">租约、续期与撤销</span></a></li><li><a href="ch-13.html"><span class="nav-num">13</span><span class="nav-text">审计设备：合规的底线</span></a></li></ul></div>
+<div class="nav-group"><p class="nav-label">生产篇</p><ul><li><a href="ch-14.html"><span class="nav-num">14</span><span class="nav-text">Seal 与 Unseal：Vault 的保险柜逻辑</span></a></li><li><a href="ch-15.html"><span class="nav-num">15</span><span class="nav-text">存储、HA 与备份恢复</span></a></li><li><a href="ch-16.html"><span class="nav-num">16</span><span class="nav-text">生产清单、升级与常见坑</span></a></li><li><a href="ch-17.html"><span class="nav-num">17</span><span class="nav-text">附录：速查表与延伸学习</span></a></li></ul></div>
+      <p class="sidebar-foot">Vault v2.1.1 实测 · 17 章</p>
+    </div>
+  </aside>
+  <div class="scrim" id="scrim" hidden></div>
+  <main id="main" class="content">
+    <article class="prose">
+<h1 id="第-5-章-策略把能读什么写成代码"><a class="anchor" href="#第-5-章-策略把能读什么写成代码" aria-label="链接到此节">#</a>第 5 章 策略：把&quot;能读什么&quot;写成代码</h1>
+<h2 id="需求"><a class="anchor" href="#需求" aria-label="链接到此节">#</a>需求</h2>
+<blockquote><p>北极星电商现在有四类消费者，要求各不相同：</p>
+<div class="table-wrap"><table><thead><tr><th>谁</th><th>要求</th></tr></thead><tbody><tr><td><code>alice</code>（应用开发）</td><td>只能读 <code>app/data/demo</code>，不能读生产库密码</td></tr><tr><td>订单服务</td><td>能读自己的配置，能列目录（便于排查），但不能写</td></tr><tr><td>CI 流水线</td><td>能在自己的前缀下建/改/删密钥，但碰不到别人的</td></tr><tr><td>值班同事</td><td>能在紧急情况下撤销某类租约，但不能读任何业务密钥</td></tr></tbody></table></div>
+<p>而且这份权限清单要能进 Git、能被 review、能被测试。</p></blockquote>
+<p>Vault 的答案是一份 <strong>HCL/JSON 策略文件</strong>。本章把策略的语法、匹配规则、优先级和验证手段讲透。</p>
+<h2 id="动手"><a class="anchor" href="#动手" aria-label="链接到此节">#</a>动手</h2>
+<h3 id="51-最小可用策略只读一个路径"><a class="anchor" href="#51-最小可用策略只读一个路径" aria-label="链接到此节">#</a>5.1 最小可用策略：只读一个路径</h3>
+<div class="code-block"><div class="code-head"><span class="code-lang">powershell</span><button class="copy-btn" type="button" data-copy>复制</button></div><pre><code class="language-powershell"><span class="tok-var">$policy</span> = @<span class="tok-str">'</span>
+path <span class="tok-str">&quot;app/data/demo&quot;</span> {
+  capabilities = [<span class="tok-str">&quot;read&quot;</span>]
+}
+
+path <span class="tok-str">&quot;app/metadata/demo&quot;</span> {
+  capabilities = [<span class="tok-str">&quot;read&quot;</span>, <span class="tok-str">&quot;list&quot;</span>]
+}
+<span class="tok-str">'@</span>
+<span class="tok-var">$policy</span> | <span class="tok-cmd">vault</span> policy write app-read -</code></pre></div>
+<div class="code-block"><div class="code-head"><span class="code-lang">text</span><button class="copy-btn" type="button" data-copy>复制</button></div><pre><code class="language-text">Success! Uploaded policy: app-read</code></pre></div>
+<blockquote><p><strong>为什么是这两条路径？</strong> 因为 KV v2 读值走 <code>data/</code>，看元数据/列目录走 <code>metadata/</code>。只用 <code>vault kv get -mount=app demo</code> 的人会只写第一条，然后发现 <code>vault kv list</code> 报 403。</p></blockquote>
+<p>用 <code>vault kv</code> 自己的提示来&quot;反推&quot;策略，是本章最实用的技巧——<code>-output-policy</code> 会打印<strong>满足这次操作所需的最小策略</strong>：</p>
+<div class="code-block"><div class="code-head"><span class="code-lang">powershell</span><button class="copy-btn" type="button" data-copy>复制</button></div><pre><code class="language-powershell"><span class="tok-cmd">vault</span> kv get <span class="tok-flag">-mount</span>=app <span class="tok-flag">-output-policy</span> demo</code></pre></div>
+<div class="code-block"><div class="code-head"><span class="code-lang">text</span><button class="copy-btn" type="button" data-copy>复制</button></div><pre><code class="language-text">path &quot;app/data/demo&quot; {
+  capabilities = [&quot;read&quot;]
+}</code></pre></div>
+<div class="code-block"><div class="code-head"><span class="code-lang">powershell</span><button class="copy-btn" type="button" data-copy>复制</button></div><pre><code class="language-powershell"><span class="tok-cmd">vault</span> kv put <span class="tok-flag">-mount</span>=app <span class="tok-flag">-output-policy</span> demo password=x</code></pre></div>
+<div class="code-block"><div class="code-head"><span class="code-lang">text</span><button class="copy-btn" type="button" data-copy>复制</button></div><pre><code class="language-text">path &quot;app/data/demo&quot; {
+  capabilities = [&quot;create&quot;, &quot;update&quot;]
+}</code></pre></div>
+<div class="code-block"><div class="code-head"><span class="code-lang">powershell</span><button class="copy-btn" type="button" data-copy>复制</button></div><pre><code class="language-powershell"><span class="tok-cmd">vault</span> kv list <span class="tok-flag">-mount</span>=app <span class="tok-flag">-output-policy</span></code></pre></div>
+<div class="code-block"><div class="code-head"><span class="code-lang">text</span><button class="copy-btn" type="button" data-copy>复制</button></div><pre><code class="language-text">path &quot;app/metadata&quot; {
+  capabilities = [&quot;list&quot;]
+}</code></pre></div>
+<p><strong>把 <code>-output-policy</code> 当成&quot;策略生成器&quot;</strong>：先在测试环境用高权限 token 跑一遍真实命令，收集输出，再拼成最终策略。这比手写策略然后反复试错快得多。</p>
+<h3 id="52-挂上身份并验证"><a class="anchor" href="#52-挂上身份并验证" aria-label="链接到此节">#</a>5.2 挂上身份并验证</h3>
+<div class="code-block"><div class="code-head"><span class="code-lang">powershell</span><button class="copy-btn" type="button" data-copy>复制</button></div><pre><code class="language-powershell"><span class="tok-cmd">vault</span> auth enable userpass
+<span class="tok-cmd">vault</span> write auth/userpass/users/alice password=alice-pw policies=app-read</code></pre></div>
+<div class="code-block"><div class="code-head"><span class="code-lang">powershell</span><button class="copy-btn" type="button" data-copy>复制</button></div><pre><code class="language-powershell"><span class="tok-com"># 用 alice 登录并拿到她的 token</span>
+<span class="tok-var">$aliceToken</span> = <span class="tok-cmd">vault</span> login <span class="tok-flag">-field</span>=token <span class="tok-flag">-method</span>=userpass username=alice password=alice-pw
+<span class="tok-var">$env:VAULT_TOKEN</span> = <span class="tok-var">$aliceToken</span>
+
+<span class="tok-cmd">vault</span> kv get <span class="tok-flag">-mount</span>=app demo</code></pre></div>
+<div class="code-block"><div class="code-head"><span class="code-lang">text</span><button class="copy-btn" type="button" data-copy>复制</button></div><pre><code class="language-text">== Secret Path ==
+app/data/demo
+...
+====== Data ======
+Key         Value
+---         -----
+password    s3cr3t
+username    demo</code></pre></div>
+<p>越权访问会被明确拒绝：</p>
+<div class="code-block"><div class="code-head"><span class="code-lang">powershell</span><button class="copy-btn" type="button" data-copy>复制</button></div><pre><code class="language-powershell"><span class="tok-cmd">vault</span> kv get <span class="tok-flag">-mount</span>=app db/prod</code></pre></div>
+<div class="code-block"><div class="code-head"><span class="code-lang">text</span><button class="copy-btn" type="button" data-copy>复制</button></div><pre><code class="language-text">Error reading app/data/db/prod: Error making API request.
+
+URL: GET http://127.0.0.1:8200/v1/app/data/db/prod
+Code: 403. Errors:
+
+* 1 error occurred:
+	* permission denied</code></pre></div>
+<blockquote><p><strong>看错误里的 URL</strong>：<code>/v1/app/data/db/prod</code>。Vault 报错时一定会告诉你<strong>它实际请求的路径</strong>，这是排查 403 的第一手线索。</p>
+<p><strong>退出码</strong>：权限拒绝时 CLI 返回 <code>2</code>（不是 1）。脚本里判断&quot;是不是权限问题&quot;可以用它。</p></blockquote>
+<p>用 root 替 alice 做能力查询（排障必备）：</p>
+<div class="code-block"><div class="code-head"><span class="code-lang">powershell</span><button class="copy-btn" type="button" data-copy>复制</button></div><pre><code class="language-powershell"><span class="tok-var">$env:VAULT_TOKEN</span> = <span class="tok-str">'root'</span>
+<span class="tok-cmd">vault</span> token capabilities <span class="tok-var">$aliceToken</span> app/data/demo      <span class="tok-com"># read</span>
+<span class="tok-cmd">vault</span> token capabilities <span class="tok-var">$aliceToken</span> app/data/db/prod   <span class="tok-com"># deny</span>
+<span class="tok-cmd">vault</span> token capabilities <span class="tok-var">$aliceToken</span> app/metadata/demo  <span class="tok-com"># list, read</span></code></pre></div>
+<h3 id="53-路径匹配-与"><a class="anchor" href="#53-路径匹配-与" aria-label="链接到此节">#</a>5.3 路径匹配：<code>+</code> 与 <code>*</code></h3>
+<p>策略的路径支持两种通配符，语义差别很大：</p>
+<div class="table-wrap"><table><thead><tr><th>写法</th><th>含义</th><th><code>kvteam/a/config</code></th><th><code>kvteam/a/b/config</code></th></tr></thead><tbody><tr><td><code>kvteam/+/config</code></td><td><code>+</code> 匹配<strong>恰好一个</strong>路径段</td><td>✅</td><td>❌</td></tr><tr><td><code>kvteam/*</code></td><td><code>*</code> 匹配<strong>任意长度的剩余部分</strong>（只能出现在末尾）</td><td>✅</td><td>✅</td></tr></tbody></table></div>
+<p>实测：</p>
+<div class="code-block"><div class="code-head"><span class="code-lang">powershell</span><button class="copy-btn" type="button" data-copy>复制</button></div><pre><code class="language-powershell"><span class="tok-var">$wildcard</span> = @<span class="tok-str">'</span>
+path <span class="tok-str">&quot;kvteam/+/config&quot;</span> {
+  capabilities = [<span class="tok-str">&quot;read&quot;</span>]
+}
+
+path <span class="tok-str">&quot;kvteam/*&quot;</span> {
+  capabilities = [<span class="tok-str">&quot;list&quot;</span>]
+}
+<span class="tok-str">'@</span>
+<span class="tok-var">$wildcard</span> | <span class="tok-cmd">vault</span> policy write wildcard-demo -
+<span class="tok-var">$t</span> = <span class="tok-cmd">vault</span> token create <span class="tok-flag">-policy</span>=wildcard-demo <span class="tok-flag">-ttl</span>=10m <span class="tok-flag">-field</span>=token
+<span class="tok-cmd">vault</span> token capabilities <span class="tok-var">$t</span> kvteam/a/config      <span class="tok-com"># read</span>
+<span class="tok-cmd">vault</span> token capabilities <span class="tok-var">$t</span> kvteam/a/b/config    <span class="tok-com"># list</span>
+<span class="tok-cmd">vault</span> token capabilities <span class="tok-var">$t</span> kvteam/a             <span class="tok-com"># list</span></code></pre></div>
+<p>注意第三条：<code>kvteam/a</code> 只命中 <code>kvteam/*</code> 的 <code>list</code>，不会命中 <code>+/config</code> 的 <code>read</code>。<strong><code>*</code> 是&quot;前缀通配&quot;，不是&quot;递归目录通配&quot;</strong>——它同时也匹配中间层级的路径。</p>
+<h3 id="54-capabilities-全表与优先级"><a class="anchor" href="#54-capabilities-全表与优先级" aria-label="链接到此节">#</a>5.4 capabilities 全表与优先级</h3>
+<p>策略块里的 <code>capabilities</code> 可以取这些值：</p>
+<div class="table-wrap"><table><thead><tr><th>能力</th><th>含义</th><th>典型用途</th></tr></thead><tbody><tr><td><code>create</code></td><td>创建新条目</td><td>KV 写入新 key</td></tr><tr><td><code>read</code></td><td>读取</td><td>读密钥、读配置</td></tr><tr><td><code>update</code></td><td>修改已有条目</td><td>KV 覆盖写、transit 加密（<strong>注意：加密也用 update</strong>）</td></tr><tr><td><code>patch</code></td><td>局部修改</td><td>KV v2 <code>patch</code></td></tr><tr><td><code>delete</code></td><td>删除</td><td>软删除</td></tr><tr><td><code>list</code></td><td>列目录</td><td><code>vault kv list</code></td></tr><tr><td><code>sudo</code></td><td>访问受保护的 <code>sys/</code> 端点</td><td>撤销租约、管理挂载</td></tr><tr><td><code>deny</code></td><td>显式拒绝</td><td>覆盖更宽的通配规则</td></tr></tbody></table></div>
+<p><strong>优先级规则（实测验证）：<code>deny</code> 永远赢。</strong></p>
+<div class="code-block"><div class="code-head"><span class="code-lang">powershell</span><button class="copy-btn" type="button" data-copy>复制</button></div><pre><code class="language-powershell"><span class="tok-var">$denyWins</span> = @<span class="tok-str">'</span>
+path <span class="tok-str">&quot;app/data/secret-x&quot;</span> {
+  capabilities = [<span class="tok-str">&quot;deny&quot;</span>]
+}
+
+path <span class="tok-str">&quot;app/data/*&quot;</span> {
+  capabilities = [<span class="tok-str">&quot;read&quot;</span>, <span class="tok-str">&quot;update&quot;</span>]
+}
+<span class="tok-str">'@</span>
+<span class="tok-var">$denyWins</span> | <span class="tok-cmd">vault</span> policy write deny-wins -
+<span class="tok-var">$t</span> = <span class="tok-cmd">vault</span> token create <span class="tok-flag">-policy</span>=deny-wins <span class="tok-flag">-ttl</span>=10m <span class="tok-flag">-field</span>=token
+<span class="tok-cmd">vault</span> token capabilities <span class="tok-var">$t</span> app/data/secret-x   <span class="tok-com"># deny</span>
+<span class="tok-cmd">vault</span> token capabilities <span class="tok-var">$t</span> app/data/demo       <span class="tok-com"># read, update</span></code></pre></div>
+<div class="code-block"><div class="code-head"><span class="code-lang">text</span><button class="copy-btn" type="button" data-copy>复制</button></div><pre><code class="language-text">deny
+read, update</code></pre></div>
+<p>这条规则非常有用：你可以先给一个宽泛的 <code>app/data/*</code> 读写，再用 <code>deny</code> 把几个敏感 key（例如 <code>app/data/root-credential</code>）单独挖掉。</p>
+<p>反过来，<strong>多个策略之间不会相互削减</strong>：如果一个 token 同时有 <code>app-read</code> 和 <code>app-admin</code>，它取并集。想削权要靠 <code>deny</code> 或 ceiling policy（见 5.7）。</p>
+<h3 id="55-用-sudo-有意识地开放控制面"><a class="anchor" href="#55-用-sudo-有意识地开放控制面" aria-label="链接到此节">#</a>5.5 用 <code>sudo</code> 有意识地开放控制面</h3>
+<p>有些 <code>sys/</code> 端点被 Vault 保护，必须显式给 <code>sudo</code>。典型例子是&quot;值班同事要能紧急批量撤销租约&quot;：</p>
+<div class="code-block"><div class="code-head"><span class="code-lang">powershell</span><button class="copy-btn" type="button" data-copy>复制</button></div><pre><code class="language-powershell"><span class="tok-var">$leaseAdmin</span> = @<span class="tok-str">'</span>
+path <span class="tok-str">&quot;sys/leases/revoke-prefix/*&quot;</span> {
+  capabilities = [<span class="tok-str">&quot;sudo&quot;</span>, <span class="tok-str">&quot;update&quot;</span>]
+}
+<span class="tok-str">'@</span>
+<span class="tok-var">$leaseAdmin</span> | <span class="tok-cmd">vault</span> policy write lease-admin -</code></pre></div>
+<p>实测对照：给 <code>sudo</code> 时命令成功；去掉 <code>sudo</code> 只留 <code>update</code> 则被拒绝：</p>
+<div class="code-block"><div class="code-head"><span class="code-lang">text</span><button class="copy-btn" type="button" data-copy>复制</button></div><pre><code class="language-text">Error revoking leases with prefix auth/token/create: Error making API request.
+URL: PUT http://127.0.0.1:8200/v1/sys/leases/revoke-prefix/auth/token/create
+Code: 403. Errors:
+* 1 error occurred:
+	* permission denied</code></pre></div>
+<blockquote><p>⚠️ <strong>真实演练中的教训</strong>：<code>vault lease revoke -prefix auth/token/create</code> 会撤销<strong>该前缀下的所有 token</strong>。我在实验中执行它之后，连自己正在用的 token（以及 dev root token）都被撤销了，环境当场失效。这正是&quot;按前缀撤销&quot;的威力，也正是它需要 <code>sudo</code> 的原因。生产上请把这类能力限制到极少数人，并配合审计（第 13 章）。</p></blockquote>
+<h3 id="56-模板化策略让一个策略适配所有团队"><a class="anchor" href="#56-模板化策略让一个策略适配所有团队" aria-label="链接到此节">#</a>5.6 模板化策略：让一个策略适配所有团队</h3>
+<p>当 CI 有成百上千个 job 时，为每个 job 写一份策略不现实。Vault 允许在策略路径里用<strong>模板变量</strong>，取值来自登录身份（identity）：</p>
+<div class="code-block"><div class="code-head"><span class="code-lang">powershell</span><button class="copy-btn" type="button" data-copy>复制</button></div><pre><code class="language-powershell"><span class="tok-var">$template</span> = @<span class="tok-str">'</span>
+path <span class="tok-str">&quot;ci/data/{{identity.entity.aliases.auth_approle_12345678.name}}/*&quot;</span> {
+  capabilities = [<span class="tok-str">&quot;create&quot;</span>, <span class="tok-str">&quot;read&quot;</span>, <span class="tok-str">&quot;update&quot;</span>, <span class="tok-str">&quot;delete&quot;</span>, <span class="tok-str">&quot;list&quot;</span>]
+}
+<span class="tok-str">'@</span>
+<span class="tok-var">$template</span> | <span class="tok-cmd">vault</span> policy write ci-template -
+<span class="tok-cmd">vault</span> policy read ci-template</code></pre></div>
+<div class="code-block"><div class="code-head"><span class="code-lang">text</span><button class="copy-btn" type="button" data-copy>复制</button></div><pre><code class="language-text">path &quot;ci/data/{{identity.entity.aliases.auth_approle_12345678.name}}/*&quot; {
+  capabilities = [&quot;create&quot;, &quot;read&quot;, &quot;update&quot;, &quot;delete&quot;, &quot;list&quot;]
+}</code></pre></div>
+<p>关键点：</p>
+<ul><li><code>{{identity.entity.aliases.&lt;auth_accessor&gt;.name}}</code> 里的 accessor 要用<strong>实际挂载的 accessor</strong>（<code>vault auth list</code> 可以看到，例如 <code>auth_approle_b1e4acc1</code>），写成猜测的值不会生效；</li><li>模板变量只在有 identity entity 的认证方式下才有值（AppRole、JWT、Kubernetes 等都会有）；</li><li>结果就是：<strong>同一个策略文件</strong>，每个 job 登录后只能访问自己名字前缀下的密钥。这比给每个 job 单独建策略安全得多，也省事得多。</li></ul>
+<h3 id="57-默认策略与-ceiling"><a class="anchor" href="#57-默认策略与-ceiling" aria-label="链接到此节">#</a>5.7 默认策略与 ceiling</h3>
+<p>两个&quot;不写也会有&quot;的策略，值得认识：</p>
+<div class="code-block"><div class="code-head"><span class="code-lang">powershell</span><button class="copy-btn" type="button" data-copy>复制</button></div><pre><code class="language-powershell"><span class="tok-cmd">vault</span> policy list</code></pre></div>
+<div class="code-block"><div class="code-head"><span class="code-lang">text</span><button class="copy-btn" type="button" data-copy>复制</button></div><pre><code class="language-text">app-read
+default
+default-ceiling
+root</code></pre></div>
+<ul><li><strong><code>default</code></strong>：所有 token 自动附带。内容可以在 <code>vault policy read default</code> 看到，它给了每个 token 一些必要的自助能力：<code>auth/token/lookup-self</code>、<code>auth/token/renew-self</code>、<code>sys/capabilities-self</code>、管理自己的 <code>cubbyhole/*</code>、以及 response wrapping 相关端点。<strong>不要试图删掉默认策略</strong>——很多客户端（包括 Vault Agent）依赖它。</li><li><strong><code>default-ceiling</code></strong>（Vault 2.x 新增）：默认策略的&quot;上限&quot;。ceiling policy 的概念是&quot;<strong>子 token 无论被授予什么，都不能超过这个上限</strong>&quot;，是企业版做集中管控的常用手段；在 OSS 里它默认只包含极小的读权限，用来给 Agent 注册表等服务自助读取。</li></ul>
+<h3 id="58-策略的工程化格式化与验证"><a class="anchor" href="#58-策略的工程化格式化与验证" aria-label="链接到此节">#</a>5.8 策略的工程化：格式化与验证</h3>
+<div class="code-block"><div class="code-head"><span class="code-lang">powershell</span><button class="copy-btn" type="button" data-copy>复制</button></div><pre><code class="language-powershell"><span class="tok-cmd">vault</span> policy fmt .\app-read.hcl      <span class="tok-com"># 统一缩进（只改本地文件）</span>
+<span class="tok-cmd">vault</span> policy write app-read .\app-read.hcl
+<span class="tok-cmd">vault</span> policy read app-read
+<span class="tok-cmd">vault</span> policy delete app-read</code></pre></div>
+<blockquote><p><strong>实测踩坑：Windows 上别用带 BOM 的 UTF-8 写策略文件。</strong> 用 <code>Set-Content -Encoding utf8</code>（Windows PowerShell 5.1）写出的文件会在开头插入 <code>EF BB BF</code>，Vault 解析时报：</p>
+<div class="code-block"><div class="code-head"><span class="code-lang">text</span><button class="copy-btn" type="button" data-copy>复制</button></div><pre><code class="language-text">failed to parse policy: At 1:1: illegal char</code></pre></div>
+<p>三种解法任选：</p>
+<ol><li>用 PowerShell 7 的 <code>Set-Content -Encoding utf8NoBOM</code>；</li><li>用 <code>[IO.File]::WriteAllText($path, $text, (New-Object System.Text.UTF8Encoding($false)))</code>；</li><li><strong>最省事</strong>：直接把内容通过管道喂给 Vault，不落盘：<div class="code-block"><div class="code-head"><span class="code-lang">powershell</span><button class="copy-btn" type="button" data-copy>复制</button></div><pre><code class="language-powershell"><span class="tok-var">$policy</span> | <span class="tok-cmd">vault</span> policy write app-read -</code></pre></div></li></ol></blockquote>
+<p>把策略文件放进 Git，并在 CI 里做两件事：</p>
+<ol><li><code>vault policy fmt</code> + <code>git diff --exit-code</code>：禁止未格式化的策略合入；</li><li>在<strong>隔离的测试 Vault</strong>上 <code>vault policy write</code> + 针对关键路径跑一组 <code>vault token capabilities</code> 断言（下节给脚本）。</li></ol>
+<h2 id="原理一次请求的策略判定过程"><a class="anchor" href="#原理一次请求的策略判定过程" aria-label="链接到此节">#</a>原理：一次请求的策略判定过程</h2>
+<div class="code-block"><div class="code-head"><span class="code-lang">text</span><button class="copy-btn" type="button" data-copy>复制</button></div><pre><code class="language-text">请求：GET /v1/app/data/demo（token 携带策略 app-read、default）
+  │
+  ├─ 1. 合并 token 的所有策略（app-read + default + 身份附加策略）
+  ├─ 2. 找出所有能匹配 &quot;app/data/demo&quot; 的 path 规则
+  │       命中：app-read 的 path &quot;app/data/demo&quot; → read
+  ├─ 3. 若任意一条命中规则包含 deny → 直接拒绝（deny 优先）
+  ├─ 4. 否则取并集，判断是否包含本次操作需要的能力（GET → read）
+  └─ 5. 允许 → 交给 KV 引擎；拒绝 → 403 并写审计</code></pre></div>
+<p>&quot;能力检查&quot;永远发生在<strong>引擎之前</strong>，所以策略是 Vault 里唯一的授权真相来源。这也是为什么路由错、路径错会表现为&quot;策略不生效&quot;——它其实一直在生效，只是匹配的路径和你以为的不一样。</p>
+<h2 id="踩坑与检查清单"><a class="anchor" href="#踩坑与检查清单" aria-label="链接到此节">#</a>踩坑与检查清单</h2>
+<ul><li><strong>只写 <code>data/</code> 不写 <code>metadata/</code></strong>，结果 <code>vault kv list</code> 403。列目录需要 <code>metadata/</code> 的 <code>list</code>。</li><li><strong>路径用 CLI 别名而不是 API 真实路径</strong>。<code>app/demo</code> 不等于 <code>app/data/demo</code>。</li><li><strong><code>+</code> 与 <code>*</code> 混用导致过宽授权</strong>。例如 <code>path &quot;app/*&quot;</code> 会让你意外拿到 <code>app/metadata/*</code>、<code>app/delete/*</code>、<code>app/destroy/*</code> 的权限，包括<strong>彻底销毁</strong>——生产上要把 <code>destroy</code> 单独排除：<div class="code-block"><div class="code-head"><span class="code-lang">hcl</span><button class="copy-btn" type="button" data-copy>复制</button></div><pre><code class="language-hcl"><span class="tok-cmd">path</span> <span class="tok-str">&quot;app/destroy/*&quot;</span> {
+<span class="tok-key">  <span class="tok-cmd">capabilities</span> =</span> [<span class="tok-str">&quot;deny&quot;</span>]
+}</code></pre></div></li><li><strong>update 不等于只读</strong>：<code>transit/encrypt/&lt;key&gt;</code> 用的是 <code>update</code> 能力，别给成 <code>read</code>。</li><li><strong><code>sudo</code> 是最危险的能力</strong>，只给自动化或极少数值班账号，并确保审计开启。</li><li><strong>策略变更不会自动重建 token</strong>：token 的权限在请求时按<strong>当前策略</strong>实时计算，所以改了策略立即生效（不需要重新登录），反过来说——<strong>下线权限时别忘了同时撤销旧 token</strong>（第 7 章）。</li><li><strong>验证方式固定为 <code>vault token capabilities</code></strong>：新写一份策略，至少对&quot;该允许的路径&quot;和&quot;该拒绝的路径&quot;各断言一次。</li></ul>
+<p>下一章我们把&quot;应用怎么自己拿到密钥&quot;这件事推到极致：让数据库密码根本不存在。</p>
+    </article>
+    <nav class="pager">
+    <a class="pager-prev" href="ch-04.html"><span>上一章</span><strong>第 4 章 KV v2：给密钥加上版本和删除保护</strong></a>
+    <a class="pager-next" href="ch-06.html"><span>下一章</span><strong>第 6 章 拿到密钥的凭证：数据库动态密钥</strong></a>
+  </nav>
+    <footer class="site-foot">
+      <p>本页内容源自本仓库 Markdown 源文件；全部命令在 HashiCorp Vault v2.1.1 上实测。</p>
+      <p>生产环境请以 <a href="https://developer.hashicorp.com/vault/docs" rel="noopener">官方文档</a> 为准。</p>
+    </footer>
+  </main>
+  <div class="toc-rail"><nav class="toc" aria-label="本页目录"><p class="toc-title">本页目录</p><ul><li class="toc-l2"><a href="#需求">需求</a></li><li class="toc-l2"><a href="#动手">动手</a></li><li class="toc-l3"><a href="#51-最小可用策略只读一个路径">5.1 最小可用策略：只读一个路径</a></li><li class="toc-l3"><a href="#52-挂上身份并验证">5.2 挂上身份并验证</a></li><li class="toc-l3"><a href="#53-路径匹配-与">5.3 路径匹配：+ 与 </a></li><li class="toc-l3"><a href="#54-capabilities-全表与优先级">5.4 capabilities 全表与优先级</a></li><li class="toc-l3"><a href="#55-用-sudo-有意识地开放控制面">5.5 用 sudo 有意识地开放控制面</a></li><li class="toc-l3"><a href="#56-模板化策略让一个策略适配所有团队">5.6 模板化策略：让一个策略适配所有团队</a></li><li class="toc-l3"><a href="#57-默认策略与-ceiling">5.7 默认策略与 ceiling</a></li><li class="toc-l3"><a href="#58-策略的工程化格式化与验证">5.8 策略的工程化：格式化与验证</a></li><li class="toc-l2"><a href="#原理一次请求的策略判定过程">原理：一次请求的策略判定过程</a></li><li class="toc-l2"><a href="#踩坑与检查清单">踩坑与检查清单</a></li></ul></nav></div>
+</div>
+<div class="search-modal" id="searchModal" hidden>
+  <div class="search-box" role="dialog" aria-modal="true" aria-label="站内搜索">
+    <input id="searchInput" type="search" placeholder="搜索章节、命令、报错信息…（支持多个关键词，空格分隔）" autocomplete="off">
+    <button class="icon-btn" id="searchClose" aria-label="关闭搜索">✕</button>
+  </div>
+  <div class="search-results" id="searchResults"><p class="search-hint">输入关键词开始搜索，例如：动态密钥 / AppRole / sealed / check-and-set</p></div>
+</div>
+<script src="assets/app.js" defer></script>
+</body>
+</html>

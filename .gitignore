@@ -1,0 +1,28 @@
+# GitBook 构建产物
+_book/
+.gitbook/
+
+# 本地实验产生的密钥与数据，绝对不要提交
+*.vault-init.json
+init.json
+unseal-keys.txt
+root-token.txt
+vault-data/
+prod-data/
+audit.log
+.env
+
+# 本仓库自测实验目录（作者本地验证示例命令用）
+.lab/
+pid
+pid-pki
+
+# Web 包产物由 `node tools/build-web.mjs` / `node tools/pack.mjs` 生成。
+# 想提交现成产物就保持注释；不想提交就取消下面两行注释。
+# dist/
+# vault-tutorial-web.zip
+
+# 编辑器
+.vscode/
+.idea/
+.DS_Store

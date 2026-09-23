@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="zh-CN" data-page="ch-15">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>第 15 章 存储、HA 与备份恢复 · Vault 入门教程</title>
+<meta name="description" content="第 15 章 存储、HA 与备份恢复 需求 Vault 要上生产了，运维问了三个问题： 数据存在哪？会不会像 dev 模式那样一重启就没了？ 一台机器挂了怎么办？能多节点吗？ 删错了/存坏了，怎么恢复？ 本章把存储后端、集成存储（Raft）与 HA、以及备份恢复的完整链路讲清楚。 动手 15.1 存">
+<meta name="generator" content="vault-tutorial static builder">
+<meta property="og:title" content="第 15 章 存储、HA 与备份恢复 · Vault 入门教程">
+<meta property="og:type" content="article">
+<link rel="stylesheet" href="assets/style.css">
+<link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+<script>(function(){try{var t=localStorage.getItem('vt-theme');if(!t){t=window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light';}document.documentElement.dataset.theme=t;}catch(e){}})();</script>
+</head>
+<body>
+<a class="skip" href="#main">跳到正文</a>
+<header class="topbar">
+  <button class="icon-btn" id="navToggle" aria-label="切换目录" aria-expanded="false">☰</button>
+  <a class="brand" href="index.html"><span class="brand-mark">◇</span><span class="brand-text">Vault 入门教程<em>从一个个真实需求出发</em></span></a>
+  <div class="topbar-actions">
+    <button class="search-open" id="searchOpen" type="button"><span>搜索</span><kbd>/</kbd></button>
+    <button class="icon-btn" id="themeToggle" aria-label="切换主题">◐</button>
+  </div>
+</header>
+<div class="layout">
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-inner">
+      <p class="sidebar-head">目录</p>
+      <div class="nav-group"><p class="nav-label">开始</p><ul><li><a href="index.html" data-home><span class="nav-num nav-num-dot">•</span><span class="nav-text">前言：从一个个真实需求出发</span></a></li></ul></div>
+<div class="nav-group"><p class="nav-label">基础篇</p><ul><li><a href="ch-01.html"><span class="nav-num">1</span><span class="nav-text">为什么需要 Vault：一个泄露事故的复盘</span></a></li><li><a href="ch-02.html"><span class="nav-num">2</span><span class="nav-text">安装与第一个 Vault：dev 模式</span></a></li><li><a href="ch-03.html"><span class="nav-num">3</span><span class="nav-text">Hello Vault：状态、登录与第一个 secret</span></a></li><li><a href="ch-04.html"><span class="nav-num">4</span><span class="nav-text">KV v2：给密钥加上版本和删除保护</span></a></li></ul></div>
+<div class="nav-group"><p class="nav-label">核心篇</p><ul><li><a href="ch-05.html"><span class="nav-num">5</span><span class="nav-text">策略：把&quot;能读什么&quot;写成代码</span></a></li><li><a href="ch-06.html"><span class="nav-num">6</span><span class="nav-text">拿到密钥的凭证：数据库动态密钥</span></a></li><li><a href="ch-07.html"><span class="nav-num">7</span><span class="nav-text">Token：一切访问的通行证</span></a></li><li><a href="ch-08.html"><span class="nav-num">8</span><span class="nav-text">认证方法：从人到机器</span></a></li><li><a href="ch-09.html"><span class="nav-num">9</span><span class="nav-text">Vault Agent：让应用完全不知道 Vault 的存在</span></a></li></ul></div>
+<div class="nav-group"><p class="nav-label">进阶篇</p><ul><li><a href="ch-10.html"><span class="nav-num">10</span><span class="nav-text">Transit：加密即服务</span></a></li><li><a href="ch-11.html"><span class="nav-num">11</span><span class="nav-text">PKI：把证书签发变成一次 API 调用</span></a></li><li><a href="ch-12.html"><span class="nav-num">12</span><span class="nav-text">租约、续期与撤销</span></a></li><li><a href="ch-13.html"><span class="nav-num">13</span><span class="nav-text">审计设备：合规的底线</span></a></li></ul></div>
+<div class="nav-group"><p class="nav-label">生产篇</p><ul><li><a href="ch-14.html"><span class="nav-num">14</span><span class="nav-text">Seal 与 Unseal：Vault 的保险柜逻辑</span></a></li><li><a href="ch-15.html" class="active" aria-current="page"><span class="nav-num">15</span><span class="nav-text">存储、HA 与备份恢复</span></a></li><li><a href="ch-16.html"><span class="nav-num">16</span><span class="nav-text">生产清单、升级与常见坑</span></a></li><li><a href="ch-17.html"><span class="nav-num">17</span><span class="nav-text">附录：速查表与延伸学习</span></a></li></ul></div>
+      <p class="sidebar-foot">Vault v2.1.1 实测 · 17 章</p>
+    </div>
+  </aside>
+  <div class="scrim" id="scrim" hidden></div>
+  <main id="main" class="content">
+    <article class="prose">
+<h1 id="第-15-章-存储ha-与备份恢复"><a class="anchor" href="#第-15-章-存储ha-与备份恢复" aria-label="链接到此节">#</a>第 15 章 存储、HA 与备份恢复</h1>
+<h2 id="需求"><a class="anchor" href="#需求" aria-label="链接到此节">#</a>需求</h2>
+<blockquote><p>Vault 要上生产了，运维问了三个问题：</p>
+<ol><li>数据存在哪？会不会像 dev 模式那样一重启就没了？</li><li>一台机器挂了怎么办？能多节点吗？</li><li><strong>删错了/存坏了，怎么恢复？</strong></li></ol></blockquote>
+<p>本章把存储后端、集成存储（Raft）与 HA、以及备份恢复的完整链路讲清楚。</p>
+<h2 id="动手"><a class="anchor" href="#动手" aria-label="链接到此节">#</a>动手</h2>
+<h3 id="151-存储后端怎么选"><a class="anchor" href="#151-存储后端怎么选" aria-label="链接到此节">#</a>15.1 存储后端怎么选</h3>
+<p>Vault 自己不实现&quot;分布式数据库&quot;，它把<strong>加密后的密文</strong>交给存储后端。选型原则只有一条：</p>
+<blockquote><p><strong>优先选&quot;集成存储（Integrated Storage / Raft）&quot;</strong>——它是 HashiCorp 官方主推、与 Vault 一起演进的方案，自带 HA、快照和集群管理。</p></blockquote>
+<div class="table-wrap"><table><thead><tr><th>后端</th><th>类型</th><th>HA</th><th>快照备份</th><th>适用</th></tr></thead><tbody><tr><td><code>raft</code>（集成存储）</td><td>内置</td><td>✅ 原生</td><td>✅ <code>operator raft snapshot</code></td><td><strong>生产首选</strong>，自建环境</td></tr><tr><td><code>file</code></td><td>单机文件</td><td>❌</td><td>文件级</td><td>单机实验、极简部署</td></tr><tr><td><code>consul</code></td><td>外部 KV</td><td>✅</td><td>Consul snapshot</td><td>已有 Consul 的团队</td></tr><tr><td>云托管存储（DynamoDB/Spanner 等）</td><td>云服务</td><td>视服务</td><td>云侧备份</td><td>已有云基础设施</td></tr></tbody></table></div>
+<p><code>file</code> 与本教程第 14 章用的一致，适合先把 Seal/Unseal 概念跑通。</p>
+<h3 id="152-单节点-raft-上手最接近生产的形态"><a class="anchor" href="#152-单节点-raft-上手最接近生产的形态" aria-label="链接到此节">#</a>15.2 单节点 Raft 上手（最接近生产的形态）</h3>
+<div class="code-block"><div class="code-head"><span class="code-lang">hcl</span><button class="copy-btn" type="button" data-copy>复制</button></div><pre><code class="language-hcl"><span class="tok-com"># raft-single.hcl</span>
+<span class="tok-key"><span class="tok-cmd">ui</span> =</span> true
+
+<span class="tok-cmd">storage</span> <span class="tok-str">&quot;raft&quot;</span> {
+<span class="tok-key">  <span class="tok-cmd">path</span>    =</span> <span class="tok-str">&quot;C:/vault/data&quot;</span>        <span class="tok-com"># 绝对路径！</span>
+<span class="tok-key">  <span class="tok-cmd">node_id</span> =</span> <span class="tok-str">&quot;vault-1&quot;</span>
+}
+
+<span class="tok-cmd">listener</span> <span class="tok-str">&quot;tcp&quot;</span> {
+<span class="tok-key">  <span class="tok-cmd">address</span>     =</span> <span class="tok-str">&quot;0.0.0.0:8200&quot;</span>
+<span class="tok-key">  <span class="tok-cmd">tls_disable</span> =</span> true               <span class="tok-com"># 生产改 TLS</span>
+}
+
+<span class="tok-key"><span class="tok-cmd">api_addr</span>     =</span> <span class="tok-str">&quot;http://127.0.0.1:8200&quot;</span>
+<span class="tok-key"><span class="tok-cmd">cluster_addr</span> =</span> <span class="tok-str">&quot;http://127.0.0.1:8201&quot;</span>
+<span class="tok-key"><span class="tok-cmd">disable_mlock</span> =</span> true</code></pre></div>
+<p>启动、初始化、解封的流程与第 14 章完全相同：</p>
+<div class="code-block"><div class="code-head"><span class="code-lang">powershell</span><button class="copy-btn" type="button" data-copy>复制</button></div><pre><code class="language-powershell"><span class="tok-cmd">vault</span> server <span class="tok-flag">-config</span>=raft-single.hcl
+<span class="tok-cmd">vault</span> operator init <span class="tok-flag">-key-shares</span>=3 <span class="tok-flag">-key-threshold</span>=2
+<span class="tok-cmd">vault</span> operator unseal &lt;key1&gt;
+<span class="tok-cmd">vault</span> operator unseal &lt;key2&gt;</code></pre></div>
+<p>查看 Raft 成员：</p>
+<div class="code-block"><div class="code-head"><span class="code-lang">powershell</span><button class="copy-btn" type="button" data-copy>复制</button></div><pre><code class="language-powershell"><span class="tok-cmd">vault</span> operator raft list-peers</code></pre></div>
+<div class="code-block"><div class="code-head"><span class="code-lang">text</span><button class="copy-btn" type="button" data-copy>复制</button></div><pre><code class="language-text">Node      Address           State       Voter
+----      -------           -----       -----
+vault-1   127.0.0.1:8201    leader      true</code></pre></div>
+<h3 id="153-三节点-ha-集群"><a class="anchor" href="#153-三节点-ha-集群" aria-label="链接到此节">#</a>15.3 三节点 HA 集群</h3>
+<p>HA 的形态是&quot;<strong>一个 active + 多个 standby</strong>&quot;：所有节点都能接收请求，只有 active 会写存储；standby 会自动转发或重定向。</p>
+<p>三个节点各自的配置片段（关键是 <code>node_id</code> 与地址不同）：</p>
+<div class="code-block"><div class="code-head"><span class="code-lang">hcl</span><button class="copy-btn" type="button" data-copy>复制</button></div><pre><code class="language-hcl"><span class="tok-com"># vault-2.hcl</span>
+<span class="tok-cmd">storage</span> <span class="tok-str">&quot;raft&quot;</span> {
+<span class="tok-key">  <span class="tok-cmd">path</span>    =</span> <span class="tok-str">&quot;/vault/data&quot;</span>
+<span class="tok-key">  <span class="tok-cmd">node_id</span> =</span> <span class="tok-str">&quot;vault-2&quot;</span>
+
+  <span class="tok-cmd">retry_join</span> {
+<span class="tok-key">    <span class="tok-cmd">leader_api_addr</span> =</span> <span class="tok-str">&quot;https://vault-1.internal:8200&quot;</span>
+  }
+  <span class="tok-cmd">retry_join</span> {
+<span class="tok-key">    <span class="tok-cmd">leader_api_addr</span> =</span> <span class="tok-str">&quot;https://vault-3.internal:8200&quot;</span>
+  }
+}
+
+<span class="tok-key"><span class="tok-cmd">api_addr</span>     =</span> <span class="tok-str">&quot;https://vault-2.internal:8200&quot;</span>
+<span class="tok-key"><span class="tok-cmd">cluster_addr</span> =</span> <span class="tok-str">&quot;https://vault-2.internal:8201&quot;</span></code></pre></div>
+<p>也可以先启动再手动加入：</p>
+<div class="code-block"><div class="code-head"><span class="code-lang">bash</span><button class="copy-btn" type="button" data-copy>复制</button></div><pre><code class="language-bash"><span class="tok-cmd">vault</span> operator raft join https://<span class="tok-cmd">vault</span>-1.internal:8200</code></pre></div>
+<p><strong>HA 的关键运维事实</strong>：</p>
+<ul><li><strong>每个节点都要解封</strong>（除非用自动解封）——重启后逐个 <code>vault operator unseal</code>，或用 KMS 自动解封；</li><li><strong>未解封的节点不会参与选举</strong>，3 节点里挂了 2 个就失去 quorum，无法写入；</li><li>standby 节点<strong>只是同构副本</strong>，不是&quot;只读副本&quot;——它会转发请求给 active。</li></ul>
+<h3 id="154-备份raft-快照"><a class="anchor" href="#154-备份raft-快照" aria-label="链接到此节">#</a>15.4 备份：Raft 快照</h3>
+<div class="code-block"><div class="code-head"><span class="code-lang">powershell</span><button class="copy-btn" type="button" data-copy>复制</button></div><pre><code class="language-powershell"><span class="tok-cmd">vault</span> operator raft snapshot save backup-$(Get-Date <span class="tok-flag">-Format</span> yyyyMMdd-HHmm).snap</code></pre></div>
+<div class="code-block"><div class="code-head"><span class="code-lang">text</span><button class="copy-btn" type="button" data-copy>复制</button></div><pre><code class="language-text">Saved snapshot backup-20260923-2030.snap</code></pre></div>
+<p><strong>这条命令只能在 Raft 存储（或企业版的 DR 复制）上使用</strong>。在 <code>file</code> 存储上执行会得到 404（实测）：</p>
+<div class="code-block"><div class="code-head"><span class="code-lang">text</span><button class="copy-btn" type="button" data-copy>复制</button></div><pre><code class="language-text">Error taking the snapshot: Error making API request.
+URL: GET http://127.0.0.1:8300/v1/sys/storage/raft/snapshot
+Code: 404. Errors:
+* 1 error occurred:
+	* unsupported path</code></pre></div>
+<p>同理，<code>vault operator raft list-peers</code> 在非 Raft 存储上会输出：</p>
+<div class="code-block"><div class="code-head"><span class="code-lang">text</span><button class="copy-btn" type="button" data-copy>复制</button></div><pre><code class="language-text">No raft cluster configuration found</code></pre></div>
+<p>（如果 Vault 处于<strong>加封</strong>状态，这两个命令都会先返回 <code>Code: 503 ... Vault is sealed</code>——所以看到 503 请先解封，再判断是不是存储类型的问题。）</p>
+<p>顺手可以查集群的版本历史（2.x 提供）：</p>
+<div class="code-block"><div class="code-head"><span class="code-lang">powershell</span><button class="copy-btn" type="button" data-copy>复制</button></div><pre><code class="language-powershell"><span class="tok-cmd">vault</span> version-history</code></pre></div>
+<div class="code-block"><div class="code-head"><span class="code-lang">text</span><button class="copy-btn" type="button" data-copy>复制</button></div><pre><code class="language-text">Version  Installation Time     Build Date
+-------  -----------------     ----------
+2.1.1    2026-09-23T12:30:13Z  2026-09-15T21:21:56Z</code></pre></div>
+<p>检查快照内容（不恢复就能看）：</p>
+<div class="code-block"><div class="code-head"><span class="code-lang">powershell</span><button class="copy-btn" type="button" data-copy>复制</button></div><pre><code class="language-powershell"><span class="tok-cmd">vault</span> operator raft snapshot inspect backup-20260923-2030.snap</code></pre></div>
+<div class="code-block"><div class="code-head"><span class="code-lang">text</span><button class="copy-btn" type="button" data-copy>复制</button></div><pre><code class="language-text">ID            abcd1234-...
+Size          123456
+Index         42
+Term          3
+Version       1</code></pre></div>
+<p>备份策略建议：</p>
+<div class="table-wrap"><table><thead><tr><th>项</th><th>建议</th></tr></thead><tbody><tr><td>频率</td><td>至少每天一次；密钥变更频繁的环境可以每小时</td></tr><tr><td>保留</td><td>快照包含<strong>所有</strong>密钥密文，按最敏感数据对待；离线/异地保存</td></tr><tr><td>权限</td><td>能读快照 ≈ 能读全部数据（虽然还是密文，但结合 unseal key 就能解密）</td></tr><tr><td>自动化</td><td>由具备 <code>sys/storage/raft/snapshot</code> 读权限的<strong>专用身份</strong>执行</td></tr><tr><td>演练</td><td><strong>定期做一次真实恢复</strong>，否则备份等于没有</td></tr></tbody></table></div>
+<h3 id="155-恢复把快照装回去"><a class="anchor" href="#155-恢复把快照装回去" aria-label="链接到此节">#</a>15.5 恢复：把快照装回去</h3>
+<div class="code-block"><div class="code-head"><span class="code-lang">powershell</span><button class="copy-btn" type="button" data-copy>复制</button></div><pre><code class="language-powershell"><span class="tok-cmd">vault</span> operator raft snapshot restore backup-20260923-2030.snap</code></pre></div>
+<div class="code-block"><div class="code-head"><span class="code-lang">text</span><button class="copy-btn" type="button" data-copy>复制</button></div><pre><code class="language-text">Snapshot restore complete.</code></pre></div>
+<p>要点与踩坑：</p>
+<ul><li><strong>restore 会覆盖当前集群的全部状态</strong>（包括现有 token、策略、密钥）。这是&quot;回到过去&quot;，不是&quot;合并&quot;；</li><li>恢复后<strong>旧集群的成员信息会一并回来</strong>。跨集群恢复（例如灾备到新环境）通常需要 <code>force</code> 之类的参数与人工确认；</li><li><strong>恢复后节点仍需要解封</strong>；</li><li><strong>restore 需要强权限</strong>，不要给普通运维身份。</li></ul>
+<h3 id="156-file-存储的备份方式"><a class="anchor" href="#156-file-存储的备份方式" aria-label="链接到此节">#</a>15.6 file 存储的备份方式</h3>
+<p><code>file</code> 后端没有快照 API，只能靠<strong>文件系统级备份</strong>：</p>
+<div class="code-block"><div class="code-head"><span class="code-lang">powershell</span><button class="copy-btn" type="button" data-copy>复制</button></div><pre><code class="language-powershell"><span class="tok-com"># 停服（或至少暂停写入）后打包数据目录</span>
+Stop-Service <span class="tok-cmd">vault</span>
+<span class="tok-cmd">Compress-Archive</span> <span class="tok-flag">-Path</span> C:\<span class="tok-cmd">vault</span>\data\* <span class="tok-flag">-DestinationPath</span> C:\backup\<span class="tok-cmd">vault</span>-file-20260923.zip
+Start-Service <span class="tok-cmd">vault</span></code></pre></div>
+<p>务必同时保存：</p>
+<ol><li><strong>数据目录</strong>（密文）；</li><li><strong>unseal key</strong>（否则备份等于一堆乱码）；</li><li><strong>配置文件</strong>（listener/storage/TLS 路径）。</li></ol>
+<p>这三样缺一不可，而且<strong>不要放在同一台机器上</strong>。</p>
+<h3 id="157-集群升级与回滚概念"><a class="anchor" href="#157-集群升级与回滚概念" aria-label="链接到此节">#</a>15.7 集群升级与回滚（概念）</h3>
+<div class="code-block"><div class="code-head"><span class="code-lang">text</span><button class="copy-btn" type="button" data-copy>复制</button></div><pre><code class="language-text">升级顺序（Raft）：
+  ① 备份快照（务必）
+  ② 逐个节点升级（先 standby，再 active），每次升级后确认节点重新加入并解封
+  ③ 升级完成后验证：auth list / secrets list / 关键密钥可读
+回滚：
+  Raft 不支持&quot;降级二进制&quot;。要回退只能恢复到升级前的快照。
+  → 所以升级前的那次备份是唯一的退路。</code></pre></div>
+<p>版本侧的注意点（与本教程的版本校准相关）：</p>
+<ul><li><strong>1.21 → 2.x 的升级路径</strong>：官方要求逐大版本升级（1.20 → 1.21 → 2.0 → 2.1），不要跳版本；</li><li>升级前用 <code>vault version-history</code>（2.x 新增）确认集群的版本历史；</li><li>2.x 会新增默认挂载（如 <code>agent-registry/</code>）与默认策略（如 <code>default-ceiling</code>），升级后 <code>vault secrets list</code> / <code>vault policy list</code> 的变化是<strong>正常的</strong>，不要误删；</li><li>不要依赖&quot;跨大版本还能原样跑&quot;——先在预发环境把本教程第 4-13 章的验证脚本跑一遍。</li></ul>
+<h2 id="原理存储后端与-ha-的边界"><a class="anchor" href="#原理存储后端与-ha-的边界" aria-label="链接到此节">#</a>原理：存储后端与 HA 的边界</h2>
+<div class="code-block"><div class="code-head"><span class="code-lang">text</span><button class="copy-btn" type="button" data-copy>复制</button></div><pre><code class="language-text">            ┌──────────── 应用 / Agent ────────────┐
+            ▼                                      ▼
+      ┌──────────┐       转发写请求          ┌──────────┐
+      │ standby  │ ────────────────────────▶ │  active  │
+      └──────────┘                           └────┬─────┘
+                                                  │ 加密后的数据
+                                                  ▼
+                                        ┌──────────────────┐
+                                        │ storage backend  │ ← raft / file / consul
+                                        └──────────────────┘</code></pre></div>
+<ul><li>Vault <strong>只把密文</strong>交给存储：<strong>存储后端被攻破 ≠ 数据泄露</strong>，攻击者还需要 unseal key；</li><li>因此<strong>备份快照的安全等级 ≈ 密文等级</strong>，&quot;快照 + unseal key&quot;才是完整的数据；</li><li>HA 解决的是<strong>可用性</strong>，不是<strong>数据安全性</strong>；安全性靠 Seal/Unseal 与 TLS。</li></ul>
+<h2 id="踩坑与检查清单"><a class="anchor" href="#踩坑与检查清单" aria-label="链接到此节">#</a>踩坑与检查清单</h2>
+<ul><li><strong><code>file</code> 存储只能单机</strong>，永远不要用它做&quot;生产高可用&quot;。</li><li><strong>备份必须与 unseal key 分开保存</strong>：只备份数据目录是最常见的&quot;以为备份了其实没备份&quot;。</li><li><strong>快照要定期做恢复演练</strong>（第 16 章清单里有）。</li><li><strong>Raft 集群升级后记得逐个解封</strong>，别以为&quot;进程起来了就是好的&quot;。</li><li><strong>升级前必须备份</strong>（Raft 不支持降级）。</li><li><strong><code>api_addr</code> / <code>cluster_addr</code> 要显式配置</strong>，否则日志会警告 <code>no api_addr value specified</code>，重定向与集群通信可能出问题。</li><li><strong>监控</strong>：至少监控&quot;节点是否解封&quot;&quot;是否 active&quot;&quot;Raft 是否失去 quorum&quot;&quot;审计设备是否可用&quot;。</li></ul>
+<p>下一章把所有&quot;别忘的事&quot;合并成一份可执行的上线清单。</p>
+    </article>
+    <nav class="pager">
+    <a class="pager-prev" href="ch-14.html"><span>上一章</span><strong>第 14 章 Seal 与 Unseal：Vault 的保险柜逻辑</strong></a>
+    <a class="pager-next" href="ch-16.html"><span>下一章</span><strong>第 16 章 生产清单、升级与常见坑</strong></a>
+  </nav>
+    <footer class="site-foot">
+      <p>本页内容源自本仓库 Markdown 源文件；全部命令在 HashiCorp Vault v2.1.1 上实测。</p>
+      <p>生产环境请以 <a href="https://developer.hashicorp.com/vault/docs" rel="noopener">官方文档</a> 为准。</p>
+    </footer>
+  </main>
+  <div class="toc-rail"><nav class="toc" aria-label="本页目录"><p class="toc-title">本页目录</p><ul><li class="toc-l2"><a href="#需求">需求</a></li><li class="toc-l2"><a href="#动手">动手</a></li><li class="toc-l3"><a href="#151-存储后端怎么选">15.1 存储后端怎么选</a></li><li class="toc-l3"><a href="#152-单节点-raft-上手最接近生产的形态">15.2 单节点 Raft 上手（最接近生产的形态）</a></li><li class="toc-l3"><a href="#153-三节点-ha-集群">15.3 三节点 HA 集群</a></li><li class="toc-l3"><a href="#154-备份raft-快照">15.4 备份：Raft 快照</a></li><li class="toc-l3"><a href="#155-恢复把快照装回去">15.5 恢复：把快照装回去</a></li><li class="toc-l3"><a href="#156-file-存储的备份方式">15.6 file 存储的备份方式</a></li><li class="toc-l3"><a href="#157-集群升级与回滚概念">15.7 集群升级与回滚（概念）</a></li><li class="toc-l2"><a href="#原理存储后端与-ha-的边界">原理：存储后端与 HA 的边界</a></li><li class="toc-l2"><a href="#踩坑与检查清单">踩坑与检查清单</a></li></ul></nav></div>
+</div>
+<div class="search-modal" id="searchModal" hidden>
+  <div class="search-box" role="dialog" aria-modal="true" aria-label="站内搜索">
+    <input id="searchInput" type="search" placeholder="搜索章节、命令、报错信息…（支持多个关键词，空格分隔）" autocomplete="off">
+    <button class="icon-btn" id="searchClose" aria-label="关闭搜索">✕</button>
+  </div>
+  <div class="search-results" id="searchResults"><p class="search-hint">输入关键词开始搜索，例如：动态密钥 / AppRole / sealed / check-and-set</p></div>
+</div>
+<script src="assets/app.js" defer></script>
+</body>
+</html>

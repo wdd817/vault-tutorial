@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="zh-CN" data-page="ch-12">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>第 12 章 租约、续期与撤销 · Vault 入门教程</title>
+<meta name="description" content="第 12 章 租约、续期与撤销 需求 第 6 章我们给应用发了 1 小时过期的数据库账号 ，第 11 章发了 24 小时过期的证书 。安全同学接着问： 这些临时凭证 现在有多少条在生效 ？ 出了事能不能 立刻全部收回 ？ 服务需要更长时间能不能 续期 ，续期有没有上限？ 答案都在 Lease（租约）">
+<meta name="generator" content="vault-tutorial static builder">
+<meta property="og:title" content="第 12 章 租约、续期与撤销 · Vault 入门教程">
+<meta property="og:type" content="article">
+<link rel="stylesheet" href="assets/style.css">
+<link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+<script>(function(){try{var t=localStorage.getItem('vt-theme');if(!t){t=window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light';}document.documentElement.dataset.theme=t;}catch(e){}})();</script>
+</head>
+<body>
+<a class="skip" href="#main">跳到正文</a>
+<header class="topbar">
+  <button class="icon-btn" id="navToggle" aria-label="切换目录" aria-expanded="false">☰</button>
+  <a class="brand" href="index.html"><span class="brand-mark">◇</span><span class="brand-text">Vault 入门教程<em>从一个个真实需求出发</em></span></a>
+  <div class="topbar-actions">
+    <button class="search-open" id="searchOpen" type="button"><span>搜索</span><kbd>/</kbd></button>
+    <button class="icon-btn" id="themeToggle" aria-label="切换主题">◐</button>
+  </div>
+</header>
+<div class="layout">
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-inner">
+      <p class="sidebar-head">目录</p>
+      <div class="nav-group"><p class="nav-label">开始</p><ul><li><a href="index.html" data-home><span class="nav-num nav-num-dot">•</span><span class="nav-text">前言：从一个个真实需求出发</span></a></li></ul></div>
+<div class="nav-group"><p class="nav-label">基础篇</p><ul><li><a href="ch-01.html"><span class="nav-num">1</span><span class="nav-text">为什么需要 Vault：一个泄露事故的复盘</span></a></li><li><a href="ch-02.html"><span class="nav-num">2</span><span class="nav-text">安装与第一个 Vault：dev 模式</span></a></li><li><a href="ch-03.html"><span class="nav-num">3</span><span class="nav-text">Hello Vault：状态、登录与第一个 secret</span></a></li><li><a href="ch-04.html"><span class="nav-num">4</span><span class="nav-text">KV v2：给密钥加上版本和删除保护</span></a></li></ul></div>
+<div class="nav-group"><p class="nav-label">核心篇</p><ul><li><a href="ch-05.html"><span class="nav-num">5</span><span class="nav-text">策略：把&quot;能读什么&quot;写成代码</span></a></li><li><a href="ch-06.html"><span class="nav-num">6</span><span class="nav-text">拿到密钥的凭证：数据库动态密钥</span></a></li><li><a href="ch-07.html"><span class="nav-num">7</span><span class="nav-text">Token：一切访问的通行证</span></a></li><li><a href="ch-08.html"><span class="nav-num">8</span><span class="nav-text">认证方法：从人到机器</span></a></li><li><a href="ch-09.html"><span class="nav-num">9</span><span class="nav-text">Vault Agent：让应用完全不知道 Vault 的存在</span></a></li></ul></div>
+<div class="nav-group"><p class="nav-label">进阶篇</p><ul><li><a href="ch-10.html"><span class="nav-num">10</span><span class="nav-text">Transit：加密即服务</span></a></li><li><a href="ch-11.html"><span class="nav-num">11</span><span class="nav-text">PKI：把证书签发变成一次 API 调用</span></a></li><li><a href="ch-12.html" class="active" aria-current="page"><span class="nav-num">12</span><span class="nav-text">租约、续期与撤销</span></a></li><li><a href="ch-13.html"><span class="nav-num">13</span><span class="nav-text">审计设备：合规的底线</span></a></li></ul></div>
+<div class="nav-group"><p class="nav-label">生产篇</p><ul><li><a href="ch-14.html"><span class="nav-num">14</span><span class="nav-text">Seal 与 Unseal：Vault 的保险柜逻辑</span></a></li><li><a href="ch-15.html"><span class="nav-num">15</span><span class="nav-text">存储、HA 与备份恢复</span></a></li><li><a href="ch-16.html"><span class="nav-num">16</span><span class="nav-text">生产清单、升级与常见坑</span></a></li><li><a href="ch-17.html"><span class="nav-num">17</span><span class="nav-text">附录：速查表与延伸学习</span></a></li></ul></div>
+      <p class="sidebar-foot">Vault v2.1.1 实测 · 17 章</p>
+    </div>
+  </aside>
+  <div class="scrim" id="scrim" hidden></div>
+  <main id="main" class="content">
+    <article class="prose">
+<h1 id="第-12-章-租约续期与撤销"><a class="anchor" href="#第-12-章-租约续期与撤销" aria-label="链接到此节">#</a>第 12 章 租约、续期与撤销</h1>
+<h2 id="需求"><a class="anchor" href="#需求" aria-label="链接到此节">#</a>需求</h2>
+<blockquote><p>第 6 章我们给应用发了&quot;1 小时过期的数据库账号&quot;，第 11 章发了&quot;24 小时过期的证书&quot;。安全同学接着问：</p>
+<ul><li>这些临时凭证<strong>现在有多少条在生效</strong>？</li><li>出了事能不能<strong>立刻全部收回</strong>？</li><li>服务需要更长时间能不能<strong>续期</strong>，续期有没有上限？</li></ul></blockquote>
+<p>答案都在 <strong>Lease（租约）</strong> 这个概念里：Vault 对&quot;有寿命的东西&quot;都会登记一条租约。</p>
+<h2 id="动手"><a class="anchor" href="#动手" aria-label="链接到此节">#</a>动手</h2>
+<h3 id="121-什么有租约什么没有"><a class="anchor" href="#121-什么有租约什么没有" aria-label="链接到此节">#</a>12.1 什么有租约，什么没有</h3>
+<div class="table-wrap"><table><thead><tr><th>对象</th><th>有租约吗</th><th>说明</th></tr></thead><tbody><tr><td>KV v2 的静态密钥</td><td>❌ 无</td><td>它不会&quot;过期&quot;，Vault 不需要跟踪</td></tr><tr><td>动态数据库凭据</td><td>✅ 有</td><td>到期/撤销时要执行 <code>DROP USER</code></td></tr><tr><td>Transit 的 datakey</td><td>✅ 有</td><td>到期后不再保证密钥可用</td></tr><tr><td>PKI 签发的证书</td><td>⚠️ 视配置</td><td><code>generate_lease=true</code> 时产生租约</td></tr><tr><td>Token</td><td>⚠️ 部分</td><td>token 自己有 TTL；但 service token 的 <code>lease_id</code> 字段返回空（实测）</td></tr></tbody></table></div>
+<p>实测一个容易被误解的点——<strong>token 不是&quot;租约对象&quot;</strong>：</p>
+<div class="code-block"><div class="code-head"><span class="code-lang">powershell</span><button class="copy-btn" type="button" data-copy>复制</button></div><pre><code class="language-powershell"><span class="tok-var">$t</span> = <span class="tok-cmd">vault</span> token create <span class="tok-flag">-policy</span>=default <span class="tok-flag">-ttl</span>=30m <span class="tok-flag">-field</span>=token
+<span class="tok-cmd">vault</span> token lookup <span class="tok-flag">-format</span>=json <span class="tok-var">$t</span> | <span class="tok-cmd">ConvertFrom-Json</span> | Select-Object <span class="tok-flag">-ExpandProperty</span> data | Select-Object accessor, lease_id, ttl, type, renewable</code></pre></div>
+<div class="code-block"><div class="code-head"><span class="code-lang">text</span><button class="copy-btn" type="button" data-copy>复制</button></div><pre><code class="language-text">accessor  : npSvzphcJz3rv66D79BTvRSG
+lease_id  :          ← 空
+ttl       : 1800
+type      : service
+renewable : True</code></pre></div>
+<p>所以 token 的续期/撤销用的是 <strong><code>vault token renew</code> / <code>vault token revoke</code></strong>（第 7 章），而动态密钥用的是 <strong><code>vault lease ...</code></strong>。</p>
+<h3 id="122-列出当前租约"><a class="anchor" href="#122-列出当前租约" aria-label="链接到此节">#</a>12.2 列出当前租约</h3>
+<p>租约以<strong>挂载路径</strong>为前缀组织，可以逐层列出来：</p>
+<div class="code-block"><div class="code-head"><span class="code-lang">powershell</span><button class="copy-btn" type="button" data-copy>复制</button></div><pre><code class="language-powershell"><span class="tok-cmd">vault</span> list sys/leases/lookup/auth/token/create</code></pre></div>
+<div class="code-block"><div class="code-head"><span class="code-lang">text</span><button class="copy-btn" type="button" data-copy>复制</button></div><pre><code class="language-text">Keys
+----
+1e318ae77adf4b81cb10f9c1a776232dfab115b3
+h015fb9e77632396687c12925c6b7ddff1faef87d732fcc64b40c47abfee9dcf5
+h2cff73eed4d17fef79d0e01cba68cd3f2a7751d2bdc9f43195aa2ff7bc80997d
+h3d3e7912326d47d1049219d893781f2c292cbbf0a1d1387d767e5515f2fc5d27
+haaaad5b3d1db80271652ef6a6232af0c5b4be9a06a96f5ba36311e8e99c75d6c
+hba57cbd0577490a833ad157df7e8b9b23ff2bd6c6d0a8f1620df96523e9d57f9</code></pre></div>
+<p>数据库凭据的租约长这样：</p>
+<div class="code-block"><div class="code-head"><span class="code-lang">powershell</span><button class="copy-btn" type="button" data-copy>复制</button></div><pre><code class="language-powershell"><span class="tok-cmd">vault</span> list sys/leases/lookup/database/creds/app-readonly
+<span class="tok-com"># 返回一批 lease id 的末段</span></code></pre></div>
+<p>查看单条租约的详情（需要完整的 lease ID）：</p>
+<div class="code-block"><div class="code-head"><span class="code-lang">powershell</span><button class="copy-btn" type="button" data-copy>复制</button></div><pre><code class="language-powershell"><span class="tok-cmd">vault</span> write sys/leases/lookup lease_id=database/creds/app-readonly/AbC123...
+<span class="tok-com"># 或</span>
+<span class="tok-cmd">vault</span> lease lookup database/creds/app-readonly/AbC123...</code></pre></div>
+<div class="code-block"><div class="code-head"><span class="code-lang">text</span><button class="copy-btn" type="button" data-copy>复制</button></div><pre><code class="language-text">Key             Value
+---             -----
+expire_time     2026-09-23T21:30:00+08:00
+issue_time      2026-09-23T20:30:00+08:00
+last_renewal    &lt;nil&gt;
+renewable       true
+ttl             59m59s</code></pre></div>
+<h3 id="123-续期"><a class="anchor" href="#123-续期" aria-label="链接到此节">#</a>12.3 续期</h3>
+<div class="code-block"><div class="code-head"><span class="code-lang">powershell</span><button class="copy-btn" type="button" data-copy>复制</button></div><pre><code class="language-powershell"><span class="tok-cmd">vault</span> lease renew <span class="tok-flag">-increment</span>=1h database/creds/app-readonly/AbC123...</code></pre></div>
+<div class="code-block"><div class="code-head"><span class="code-lang">text</span><button class="copy-btn" type="button" data-copy>复制</button></div><pre><code class="language-text">Key                Value
+---                -----
+lease_id           database/creds/app-readonly/AbC123...
+lease_duration     1h
+lease_renewable    true</code></pre></div>
+<p>要点：</p>
+<ul><li><code>-increment</code> 是<strong>请求</strong>值，Vault <strong>不保证</strong>满足——最终受角色的 <code>max_ttl</code> 限制（第 6 章的 <code>max_ttl=24h</code> 就是这里起作用）；</li><li>续期不会改变密钥内容，只是延长寿命；</li><li>token 的续期走 <code>vault token renew</code>，而且<strong>周期 token 可以无限续期</strong>（第 7 章）。</li></ul>
+<h3 id="124-撤销单个按前缀"><a class="anchor" href="#124-撤销单个按前缀" aria-label="链接到此节">#</a>12.4 撤销：单个、按前缀</h3>
+<div class="code-block"><div class="code-head"><span class="code-lang">powershell</span><button class="copy-btn" type="button" data-copy>复制</button></div><pre><code class="language-powershell"><span class="tok-com"># 撤销一条（Vault 会执行 revocation_statements，例如 DROP USER）</span>
+<span class="tok-cmd">vault</span> lease revoke database/creds/app-readonly/AbC123...
+
+<span class="tok-com"># 按前缀批量撤销（需要 sudo 能力）</span>
+<span class="tok-cmd">vault</span> lease revoke <span class="tok-flag">-prefix</span> database/creds/app-readonly</code></pre></div>
+<p><strong><code>-prefix</code> 是最猛的止损手段</strong>：<code>-prefix database/creds/app-readonly</code> 会撤销该角色签发的<strong>全部</strong>凭据。数据库里对应的账号会被逐个删除。</p>
+<p>实测：没有 <code>sudo</code> 时会被拦下：</p>
+<div class="code-block"><div class="code-head"><span class="code-lang">powershell</span><button class="copy-btn" type="button" data-copy>复制</button></div><pre><code class="language-powershell"><span class="tok-var">$env:VAULT_TOKEN</span> = &lt;只有 update 的 token&gt;
+<span class="tok-cmd">vault</span> lease revoke <span class="tok-flag">-prefix</span> auth/token/create</code></pre></div>
+<div class="code-block"><div class="code-head"><span class="code-lang">text</span><button class="copy-btn" type="button" data-copy>复制</button></div><pre><code class="language-text">Error revoking leases with prefix auth/token/create: Error making API request.
+URL: PUT http://127.0.0.1:8200/v1/sys/leases/revoke-prefix/auth/token/create
+Code: 403. Errors:
+* 1 error occurred:
+	* permission denied</code></pre></div>
+<p>而带 <code>sudo</code> 的策略就成功了：</p>
+<div class="code-block"><div class="code-head"><span class="code-lang">hcl</span><button class="copy-btn" type="button" data-copy>复制</button></div><pre><code class="language-hcl"><span class="tok-cmd">path</span> <span class="tok-str">&quot;sys/leases/revoke-prefix/*&quot;</span> {
+<span class="tok-key">  <span class="tok-cmd">capabilities</span> =</span> [<span class="tok-str">&quot;sudo&quot;</span>, <span class="tok-str">&quot;update&quot;</span>]
+}</code></pre></div>
+<div class="code-block"><div class="code-head"><span class="code-lang">text</span><button class="copy-btn" type="button" data-copy>复制</button></div><pre><code class="language-text">All revocation operations queued successfully!</code></pre></div>
+<blockquote><p>⚠️ <strong>我在写这一章时踩到的真实教训</strong>：执行 <code>vault lease revoke -prefix auth/token/create</code> 之后，<strong>我自己正在使用的 token 也被撤销了</strong>（dev 环境的 root token 同样在里面），整个实验环境当场失效，只能重启 Vault。</p>
+<p>这不是 bug，而是&quot;按前缀撤销&quot;的语义：<strong>它撤销的是该前缀下的所有租约，包括你和你的自动化正在用的那个</strong>。生产上请把它当作&quot;核按钮&quot;：</p>
+<ul><li>只给极少数值班人/自动化；</li><li>执行前确认自己要撤销的<strong>精确前缀</strong>；</li><li>确保有别的可用身份（否则会把自己锁在门外）；</li><li>事后立刻审计谁在什么时候按的按钮（第 13 章）。</li></ul></blockquote>
+<h3 id="125-撤销的连锁反应"><a class="anchor" href="#125-撤销的连锁反应" aria-label="链接到此节">#</a>12.5 撤销的连锁反应</h3>
+<p>撤销一条动态凭据会触发对应引擎的&quot;清理逻辑&quot;：</p>
+<div class="code-block"><div class="code-head"><span class="code-lang">text</span><button class="copy-btn" type="button" data-copy>复制</button></div><pre><code class="language-text">vault lease revoke database/creds/app-readonly/AbC123...
+   │
+   ├─ 1. 标记租约为已撤销
+   ├─ 2. 调用数据库插件执行 revocation_statements
+   │      → DROP USER 'v-token-...'@'%'
+   └─ 3. 记录审计事件
+
+vault lease revoke -prefix auth/token/create
+   │
+   └─ 递归撤销前缀下的所有 token（第 7 章的&quot;树&quot;结构）</code></pre></div>
+<p>这条链路解释了为什么&quot;<strong>撤销要真的落到后端</strong>&quot;——撤销一条数据库租约，MySQL 里的账号是真的不见了。反过来，如果数据库此时不可用，撤销会失败并重试，审计日志里能看到失败记录（排查&quot;为什么账号还在&quot;的第一站）。</p>
+<h3 id="126-租约相关的策略"><a class="anchor" href="#126-租约相关的策略" aria-label="链接到此节">#</a>12.6 租约相关的策略</h3>
+<p>给应用/值班人员配租约权限时，常用的几条路径：</p>
+<div class="table-wrap"><table><thead><tr><th>路径</th><th>能力</th><th>用途</th></tr></thead><tbody><tr><td><code>sys/leases/renew</code></td><td><code>update</code></td><td>续期（<code>default</code> 策略已包含）</td></tr><tr><td><code>sys/leases/lookup</code></td><td><code>update</code></td><td>查询租约（<code>default</code> 策略已包含）</td></tr><tr><td><code>sys/leases/revoke</code></td><td><code>update</code></td><td>撤销单条</td></tr><tr><td><code>sys/leases/revoke-prefix/*</code></td><td><code>sudo</code> + <code>update</code></td><td>批量撤销（危险）</td></tr><tr><td><code>sys/leases/lookup/*</code></td><td><code>list</code>、<code>read</code></td><td>浏览租约清单</td></tr></tbody></table></div>
+<p>一条实用的值班策略：</p>
+<div class="code-block"><div class="code-head"><span class="code-lang">hcl</span><button class="copy-btn" type="button" data-copy>复制</button></div><pre><code class="language-hcl"><span class="tok-com"># lease-operator.hcl</span>
+<span class="tok-cmd">path</span> <span class="tok-str">&quot;sys/leases/lookup/*&quot;</span> {
+<span class="tok-key">  <span class="tok-cmd">capabilities</span> =</span> [<span class="tok-str">&quot;list&quot;</span>, <span class="tok-str">&quot;read&quot;</span>, <span class="tok-str">&quot;update&quot;</span>]
+}
+
+<span class="tok-cmd">path</span> <span class="tok-str">&quot;sys/leases/renew&quot;</span> {
+<span class="tok-key">  <span class="tok-cmd">capabilities</span> =</span> [<span class="tok-str">&quot;update&quot;</span>]
+}
+
+<span class="tok-cmd">path</span> <span class="tok-str">&quot;sys/leases/revoke-prefix/database/creds/app-readonly&quot;</span> {
+<span class="tok-key">  <span class="tok-cmd">capabilities</span> =</span> [<span class="tok-str">&quot;sudo&quot;</span>, <span class="tok-str">&quot;update&quot;</span>]
+}</code></pre></div>
+<p>注意最后一条：<strong>把 <code>-prefix</code> 的权限收窄到具体前缀</strong>，而不是 <code>sys/leases/revoke-prefix/*</code>。这样值班同事能处理业务故障，但无法一键清空整个 Vault 的 token。</p>
+<h2 id="原理租约是临时性的账本"><a class="anchor" href="#原理租约是临时性的账本" aria-label="链接到此节">#</a>原理：租约是&quot;临时性的账本&quot;</h2>
+<div class="code-block"><div class="code-head"><span class="code-lang">text</span><button class="copy-btn" type="button" data-copy>复制</button></div><pre><code class="language-text">签发临时凭证 ──▶ Vault 写一条 Lease 记录
+                  ├─ lease_id（唯一标识）
+                  ├─ issue_time / expire_time / ttl
+                  ├─ renewable
+                  └─ 撤销时需要执行的语句（由引擎提供）
+
+到期时刻 ────▶ Vault 的 expiration manager 自动撤销
+手动撤销 ────▶ 同上，立即执行</code></pre></div>
+<p>三个设计要点：</p>
+<ol><li><strong>租约让&quot;临时&quot;变得可管理</strong>：知道有多少条、分别属于谁、什么时候到期。</li><li><strong>续期是有边界的</strong>：<code>max_ttl</code> 是硬顶，防止&quot;续着续着变成永久密钥&quot;。</li><li><strong>撤销是幂等且可追溯的</strong>：重复撤销一条已经撤销的租约不会报错，审计里两次都有记录。</li></ol>
+<h2 id="踩坑与检查清单"><a class="anchor" href="#踩坑与检查清单" aria-label="链接到此节">#</a>踩坑与检查清单</h2>
+<ul><li><strong><code>vault lease revoke -prefix &lt;prefix&gt;</code> 前先三思</strong>：它会撤销该前缀下的<strong>所有</strong>租约，包括你自己。</li><li><strong>别混淆 token 与 lease</strong>：token 用 <code>vault token renew/revoke</code>；动态密钥用 <code>vault lease renew/revoke</code>。</li><li><strong>续期请求可能被&quot;打折&quot;</strong>：<code>-increment</code> 只是请求值，以返回的 <code>lease_duration</code> 为准。</li><li><strong><code>max_ttl</code> 是安全阀</strong>：给角色配 <code>max_ttl</code> 时要想清楚&quot;最坏情况下这个凭据能活多久&quot;。</li><li><strong>动态凭据的业务侧要能处理&quot;到期&quot;</strong>：至少要能重新申请；更好的做法是用 Agent 自动续期/重取（第 9 章）。</li><li><strong>租约撤销失败要告警</strong>：数据库连不上时账号删不掉，这是&quot;看似撤销、实际还在&quot;的隐患。</li><li><strong>定期巡检 <code>sys/leases/lookup</code> 下的异常长租约</strong>，尤其是 <code>auth/token/create</code> 下数量异常的情况。</li></ul>
+<p>下一章回答&quot;谁在什么时候做了什么&quot;——审计设备。</p>
+    </article>
+    <nav class="pager">
+    <a class="pager-prev" href="ch-11.html"><span>上一章</span><strong>第 11 章 PKI：把证书签发变成一次 API 调用</strong></a>
+    <a class="pager-next" href="ch-13.html"><span>下一章</span><strong>第 13 章 审计设备：合规的底线</strong></a>
+  </nav>
+    <footer class="site-foot">
+      <p>本页内容源自本仓库 Markdown 源文件；全部命令在 HashiCorp Vault v2.1.1 上实测。</p>
+      <p>生产环境请以 <a href="https://developer.hashicorp.com/vault/docs" rel="noopener">官方文档</a> 为准。</p>
+    </footer>
+  </main>
+  <div class="toc-rail"><nav class="toc" aria-label="本页目录"><p class="toc-title">本页目录</p><ul><li class="toc-l2"><a href="#需求">需求</a></li><li class="toc-l2"><a href="#动手">动手</a></li><li class="toc-l3"><a href="#121-什么有租约什么没有">12.1 什么有租约，什么没有</a></li><li class="toc-l3"><a href="#122-列出当前租约">12.2 列出当前租约</a></li><li class="toc-l3"><a href="#123-续期">12.3 续期</a></li><li class="toc-l3"><a href="#124-撤销单个按前缀">12.4 撤销：单个、按前缀</a></li><li class="toc-l3"><a href="#125-撤销的连锁反应">12.5 撤销的连锁反应</a></li><li class="toc-l3"><a href="#126-租约相关的策略">12.6 租约相关的策略</a></li><li class="toc-l2"><a href="#原理租约是临时性的账本">原理：租约是&quot;临时性的账本&quot;</a></li><li class="toc-l2"><a href="#踩坑与检查清单">踩坑与检查清单</a></li></ul></nav></div>
+</div>
+<div class="search-modal" id="searchModal" hidden>
+  <div class="search-box" role="dialog" aria-modal="true" aria-label="站内搜索">
+    <input id="searchInput" type="search" placeholder="搜索章节、命令、报错信息…（支持多个关键词，空格分隔）" autocomplete="off">
+    <button class="icon-btn" id="searchClose" aria-label="关闭搜索">✕</button>
+  </div>
+  <div class="search-results" id="searchResults"><p class="search-hint">输入关键词开始搜索，例如：动态密钥 / AppRole / sealed / check-and-set</p></div>
+</div>
+<script src="assets/app.js" defer></script>
+</body>
+</html>

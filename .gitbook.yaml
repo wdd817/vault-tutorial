@@ -1,0 +1,9 @@
+# GitBook (gitbook.com) 项目配置
+# 把本仓库连接到 GitBook 后，GitBook 会读取这个文件确定入口。
+# 文档：https://docs.gitbook.com/inputs/github-gitlab/git-configuration
+
+root: ./
+
+structure:
+  readme: README.md
+  summary: SUMMARY.md
