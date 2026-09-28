@@ -17,10 +17,10 @@ audit.log
 pid
 pid-pki
 
-# Web 包产物由 `node tools/build-web.mjs` / `node tools/pack.mjs` 生成。
-# 想提交现成产物就保持注释；不想提交就取消下面两行注释。
-# dist/
-# vault-tutorial-web.zip
+# Web 包产物：由 GitHub Actions 在发布时构建，不入库
+# 本地想重新生成：node tools/build-web.mjs && node tools/pack.mjs
+dist/
+vault-tutorial-web.zip
 
 # 编辑器
 .vscode/

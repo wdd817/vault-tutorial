@@ -96,11 +96,16 @@ cmd.exe:
 The unseal key and root token are displayed below in case you want to
 seal/unseal the Vault or re-authenticate.
 
-Unseal Key: Y97+Smc8q6w3o6oZya2teaAqm7iiBmN+u4fp1OfVHcA=
+Unseal Key: 7mQ2vXk9pLzR4tNc8sWjYb3hFd6gAe1uKq0xZi5oPwE=
 Root Token: root
 
 Development mode should NOT be used in production installations!
 ```
+
+> **注意**：`Unseal Key` 每次启动 dev 模式都会**重新随机生成**，所以你屏幕上看到的
+> 一定和我这里不一样——上面这串是占位示例，不是固定的。dev 模式的密钥只存在内存里，
+> 进程一停就没了，不需要你抄下来保管。（真实部署里恰恰相反：`operator init` 给出的
+> unseal key 必须离线分开保管，第 14 章会讲。）
 
 **新开一个终端**（保持 Vault 前台运行），设置连接信息：
 

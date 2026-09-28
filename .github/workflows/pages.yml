@@ -1,0 +1,63 @@
+name: Build and deploy to GitHub Pages
+
+# 每次推送到 main 就重新构建并发布；也可以在 Actions 页面手动触发
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# GITHUB_TOKEN 的最小权限：读仓库 + 写 Pages + 申请 id-token
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# 同一时间只跑一个发布，新的推送取消进行中的旧任务
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: 构建静态站点（零依赖，无需 npm install）
+        run: node tools/build-web.mjs
+
+      - name: 校验产物（链接 / 锚点 / 代码块覆盖 / 行内渲染回归）
+        run: node tools/verify-web.mjs
+
+      - name: 确认产物自包含（不允许出现绝对路径，保证 Pages 子路径可访问）
+        run: |
+          if grep -rInE '(src|href)="/' dist --include='*.html' | grep -v '^$'; then
+            echo "::error::发现以 / 开头的资源引用，部署到 /<repo>/ 子路径会 404"
+            exit 1
+          fi
+          echo "✅ 全部为相对路径"
+
+      - name: 配置 Pages
+        uses: actions/configure-pages@v5
+
+      - name: 上传站点产物
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: 发布到 GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
