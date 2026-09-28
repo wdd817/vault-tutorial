@@ -1,5 +1,7 @@
 # Vault 入门教程：从一个个真实需求出发
 
+> **在线版：<https://wdd817.github.io/vault-tutorial/>** —— 支持中文全文搜索（按 `Ctrl` / `Cmd` + `K`）、明暗主题与移动端阅读。源码仓库：[wdd817/vault-tutorial](https://github.com/wdd817/vault-tutorial)
+
 这是一本以 **需求驱动** 的方式讲解 [HashiCorp Vault](https://developer.hashicorp.com/vault) 的中文入门教程。我们不按"功能清单"逐个介绍 API，而是先给出一个具体的、会让人头疼的需求（例如"数据库密码又出现在 Git 里了"），再引出解决它所需要的知识点，然后动手验证。
 
 读完这本教程，你应该能够：
@@ -111,21 +113,24 @@ node tools/serve.mjs         # 本地预览 → http://127.0.0.1:8080
   已附带 `netlify.toml`、`vercel.json`、`Dockerfile` 三个即用配置，不需要可以直接删除。
 - **离线可读**：全部用相对路径，直接双击 `index.html` 也能正常翻阅；只有站内搜索依赖
   `fetch` 读取 `assets/search-index.json`，在 `file://` 下会被浏览器拦截并给出友好提示。
-- **构建期自检**：高亮渲染做了逐字节往返校验（315 个代码块），行内格式做了渲染回归检查，
+- **构建期自检**：高亮渲染做了逐字节往返校验（317 个代码块），行内格式做了渲染回归检查，
   任何一项不通过就直接以非零退出码失败，避免把内容损坏的产物发出去。
+- **改完自动上线**：推送到 `main` 后，GitHub Actions 会自动重新构建、跑校验、发布到 Pages
+  （见 `.github/workflows/pages.yml`）。流水线里还有一道额外关卡：拒绝任何以 `/` 开头的资源引用，
+  因为站点部署在 `/vault-tutorial/` 子路径下，绝对路径会导致 404。
 
 构建报告示例：
 
 ```json
 {
   "pages": 18,
-  "headings": 218,
-  "codeBlocks": 315,
-  "highlightRoundTripOK": 315,
+  "headings": 219,
+  "codeBlocks": 317,
+  "highlightRoundTripOK": 317,
   "inlineRenderOK": 18,
   "searchDocs": 18,
-  "searchChunks": 722,
-  "totalBytes": 633258
+  "searchChunks": 732,
+  "totalBytes": 637833
 }
 ```
 
