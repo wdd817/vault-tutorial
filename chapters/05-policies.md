@@ -302,7 +302,7 @@ All revocation operations queued successfully!
 > - 调用者是**普通子 token**：撤销后它自己被撤，**root token 不受影响**（root 不在该前缀下）；
 > - 调用者**就是 root**（`export VAULT_TOKEN=root`，也就是很多人在 dev 环境里的默认状态）：**root 一起被撤销**，之后所有请求都变成 `403 + invalid token`，环境当场失效，只能重启 Vault。
 >
-> 所以这条命令在生产上要当"核按钮"：只给极少数值班人/自动化，执行前确认精确前缀、确保另有可用身份，并配合审计（第 13 章）。另外别走岔路——`vault lease revoke <单条 lease>` 用的是**另一个路径** `sys/leases/revoke/*`，它同样需要 `sudo`：只给 `update` 一样是 403。这也是 5.5 一开始那份策略容易被写漏的地方。
+> 所以这条命令在生产上要当"核按钮"：只给极少数值班人/自动化，执行前确认精确前缀、确保另有可用身份，并配合审计（第 13 章）。另外别走岔路——`vault lease revoke <单条 lease>` 用的是**另一个路径** `sys/leases/revoke/*`，它**不需要 `sudo`**，但同样需要 `update`；两者别混在一份策略里不加区分（第 12 章 12.6 有完整对照）。
 
 ### 5.6 模板化策略：让一个策略适配所有团队
 
@@ -400,7 +400,7 @@ vault policy delete app-read
   }
   ```
 - **update 不等于只读**：`transit/encrypt/<key>` 用的是 `update` 能力，别给成 `read`。
-- **`sudo` 是最危险的能力**，只给自动化或极少数值班账号，并确保审计开启。两个端点**都**要 `sudo`，一个都不能少：`sys/leases/revoke-prefix/*`（按前缀批量撤销）和 `sys/leases/revoke/*`（撤销单条）。只给 `update` 不给 `sudo`，两者都会 403，验证方法见 5.5。
+- **`sudo` 是最危险的能力**，只给自动化或极少数值班账号，并确保审计开启。**只有 `sys/leases/revoke-prefix/*`（按前缀批量撤销）需要 `sudo`**；单条撤销的 `sys/leases/revoke/*` **不需要**，给 `update` 即可（实测：同一条命令，带 `sudo` 与不带 `sudo` 的结果完全一样）。别给 `sys/leases/*` 一把梭全开，那等于把核按钮塞给了每个值班同事。
 - **策略变更不会自动重建 token**：token 的权限在请求时按**当前策略**实时计算，所以改了策略立即生效（不需要重新登录），反过来说——**下线权限时别忘了同时撤销旧 token**（第 7 章）。
 - **验证方式固定为 `vault token capabilities`**：新写一份策略，至少对"该允许的路径"和"该拒绝的路径"各断言一次。
 

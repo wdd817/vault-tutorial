@@ -179,9 +179,16 @@ vault lease revoke -prefix auth/token/create
 | --- | --- | --- |
 | `sys/leases/renew` | `update` | 续期（`default` 策略已包含） |
 | `sys/leases/lookup` | `update` | 查询租约（`default` 策略已包含） |
-| `sys/leases/revoke` | `update` | 撤销单条 |
-| `sys/leases/revoke-prefix/*` | `sudo` + `update` | 批量撤销（危险） |
+| `sys/leases/revoke` | `update` | 撤销单条（**不需要 `sudo`**） |
+| `sys/leases/revoke-prefix/*` | `sudo` + `update` | 批量撤销（危险，**必须 `sudo`**） |
 | `sys/leases/lookup/*` | `list`、`read` | 浏览租约清单 |
+
+> **实测对照，别把这两行的权限记混**：同一条 `vault lease revoke` 命令，走哪个端点决定了要不要 `sudo`。
+>
+> - **单条**（`vault lease revoke <lease_id>` → `sys/leases/revoke/*`）：只需要 `update`。实测把调用者的 `sudo` 去掉，行为一模一样；反过来只给 `read`/`list` 会 403。
+> - **按前缀**（`vault lease revoke -prefix <prefix>` → `sys/leases/revoke-prefix/*`）：`update` 不够，**必须显式带 `sudo`**，否则 403。验证方法见第 5 章 5.5。
+>
+> 所以"只给 `sys/leases/*` 全开"是典型的过度授权——等于把核按钮发给每个值班同事。给单条撤销就写 `sys/leases/revoke`，批量撤销再单独、按前缀地开 `sudo`。
 
 一条实用的值班策略：
 
