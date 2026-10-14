@@ -19,7 +19,7 @@
 ui = true
 
 storage "file" {
-  path = "C:/Users/BigFoot/Workspace/self/vault-tutorial/.lab/prod-data"
+  path = "/opt/vault/data"
 }
 
 listener "tcp" {
@@ -34,7 +34,7 @@ disable_mlock = true
 
 启动（把 `VAULT_ADDR` 指向新实例）：
 
-```powershell
+```bash
 vault server -config=.lab/prod.hcl
 ```
 
@@ -48,8 +48,8 @@ vault server -config=.lab/prod.hcl
 
 ### 14.2 第一次状态检查：已启动，但未初始化且已加封
 
-```powershell
-$env:VAULT_ADDR = 'http://127.0.0.1:8300'
+```bash
+export VAULT_ADDR=http://127.0.0.1:8300
 vault status
 ```
 
@@ -71,7 +71,7 @@ HA Enabled         false
 
 ### 14.3 初始化：把钥匙切开
 
-```powershell
+```bash
 vault operator init -key-shares=3 -key-threshold=2 -format=json
 ```
 
@@ -108,8 +108,8 @@ root token len  = 28
 
 ### 14.4 加封状态下什么都不能做
 
-```powershell
-$env:VAULT_TOKEN = '<root token>'
+```bash
+export VAULT_TOKEN='<root token>'
 vault kv put -mount=secret hello value=world
 ```
 
@@ -124,7 +124,7 @@ Code: 503. Errors:
 
 ### 14.5 解封：逐把钥匙插进去
 
-```powershell
+```bash
 vault operator unseal OAALPPDN2U...
 ```
 
@@ -140,7 +140,7 @@ Unseal Progress    1/2           ← 进度 1/2
 Unseal Nonce       3672f5c4-a1ac-91d0-84da-5afb18e925d4
 ```
 
-```powershell
+```bash
 vault operator unseal EgqmlmC1ic...
 ```
 
@@ -166,7 +166,7 @@ HA Enabled      false
 
 ### 14.6 重启后：数据还在，但必须重新解封（核心验证）
 
-```powershell
+```bash
 # 写入数据
 vault secrets enable -path=biz kv-v2
 vault kv put -mount=biz orders db_password=prod-secret-42
@@ -182,18 +182,18 @@ db_password    prod-secret-42
 
 现在**直接杀掉进程**（模拟宕机/重启）：
 
-```powershell
-Stop-Process -Id <vault 进程 id> -Force
+```bash
+kill -9 '<vault 进程 id>'
 vault status
 ```
 
 ```text
-Error checking seal status: ... dial tcp 127.0.0.1:8300: connectex: No connection could be made ...
+Error checking seal status: ... dial tcp 127.0.0.1:8300: connect: connection refused ...
 ```
 
 重新启动同一个配置：
 
-```powershell
+```bash
 vault server -config=.lab/prod.hcl
 vault status
 ```
@@ -208,7 +208,7 @@ Storage Type       file
 
 再插两把钥匙（这次用第 2、3 把）：
 
-```powershell
+```bash
 vault operator unseal EgqmlmC1ic...
 vault operator unseal sGOhNYlv7N...
 vault status
@@ -220,8 +220,8 @@ Sealed          false
 
 **关键验证：数据还在。**
 
-```powershell
-$env:VAULT_TOKEN = '<root token>'
+```bash
+export VAULT_TOKEN='<root token>'
 vault kv get -mount=biz orders
 ```
 
@@ -244,7 +244,7 @@ Key            Value
 db_password    prod-secret-42
 ```
 
-```powershell
+```bash
 vault secrets list
 ```
 
@@ -266,7 +266,7 @@ sys/               system            system_b3a50988            system endpoints
 
 ### 14.7 手动加封
 
-```powershell
+```bash
 vault operator seal
 ```
 
@@ -311,13 +311,13 @@ seal "transit" {
 
 人员变动后应该重新分钥匙：
 
-```powershell
+```bash
 # 启动一次 rekey（需要达到当前阈值数量的现有 key）
 vault operator rekey -init -key-shares=5 -key-threshold=3
 
 # 按提示依次提交现有 key，然后 Vault 会输出新的 key 份额
-vault operator rekey <当前 key 1>
-vault operator rekey <当前 key 2>
+vault operator rekey '<当前 key 1>'
+vault operator rekey '<当前 key 2>'
 
 # 可选：备份当前密钥（谨慎使用）
 vault operator rekey -backup-retrieve
@@ -345,7 +345,7 @@ vault operator rekey -backup-delete
 ## 踩坑与检查清单
 
 - **`storage.path` 的相对路径基于进程工作目录**（实测踩坑），生产写绝对路径。
-- **`disable_mlock` 在 Windows 上必须为 true**；Linux 上建议保留 mlock（避免密钥被换页到磁盘），此时需要 `IPC_LOCK` 能力或 root。
+- **`disable_mlock` 生产上要保留 mlock（即保持默认的 `false`）**：Linux 下保留 mlock 可以避免密钥被换页到磁盘，此时需要 `IPC_LOCK` 能力（systemd 里加 `AmbientCapabilities=CAP_IPC_LOCK`）或 root；容器里用 `--cap-add=IPC_LOCK`。（本章的 lab 配置为了免 root 直接跑，那里写的是 `true`。）
 - **生产必须开 TLS**：`tls_cert_file` / `tls_key_file`，并配 `api_addr`、`cluster_addr`（日志里会有 `no api_addr value specified` 的警告）。
 - **unseal key 与 root token 分开保管**，且**不要**把 `-format=json` 的 init 输出留在同一台机器上。
 - **root token 用完即撤**：日常运维用受限身份；需要时 `vault operator generate-root`。

@@ -24,9 +24,9 @@
 
 实测一个容易被误解的点——**token 不是"租约对象"**：
 
-```powershell
-$t = vault token create -policy=default -ttl=30m -field=token
-vault token lookup -format=json $t | ConvertFrom-Json | Select-Object -ExpandProperty data | Select-Object accessor, lease_id, ttl, type, renewable
+```bash
+TOKEN=$(vault token create -policy=default -ttl=30m -field=token)
+vault token lookup -format=json "$TOKEN" | jq -r '.data | [.accessor, .lease_id, .ttl, .type, .renewable] | @tsv'
 ```
 
 ```text
@@ -43,7 +43,7 @@ renewable : True
 
 租约以**挂载路径**为前缀组织，可以逐层列出来：
 
-```powershell
+```bash
 vault list sys/leases/lookup/auth/token/create
 ```
 
@@ -60,14 +60,14 @@ hba57cbd0577490a833ad157df7e8b9b23ff2bd6c6d0a8f1620df96523e9d57f9
 
 数据库凭据的租约长这样：
 
-```powershell
+```bash
 vault list sys/leases/lookup/database/creds/app-readonly
 # 返回一批 lease id 的末段
 ```
 
 查看单条租约的详情（需要完整的 lease ID）：
 
-```powershell
+```bash
 vault write sys/leases/lookup lease_id=database/creds/app-readonly/AbC123...
 # 或
 vault lease lookup database/creds/app-readonly/AbC123...
@@ -85,7 +85,7 @@ ttl             59m59s
 
 ### 12.3 续期
 
-```powershell
+```bash
 vault lease renew -increment=1h database/creds/app-readonly/AbC123...
 ```
 
@@ -105,7 +105,7 @@ lease_renewable    true
 
 ### 12.4 撤销：单个、按前缀
 
-```powershell
+```bash
 # 撤销一条（Vault 会执行 revocation_statements，例如 DROP USER）
 vault lease revoke database/creds/app-readonly/AbC123...
 
@@ -117,8 +117,8 @@ vault lease revoke -prefix database/creds/app-readonly
 
 实测：没有 `sudo` 时会被拦下：
 
-```powershell
-$env:VAULT_TOKEN = <只有 update 的 token>
+```bash
+export VAULT_TOKEN='<只有 update 的 token>'
 vault lease revoke -prefix auth/token/create
 ```
 

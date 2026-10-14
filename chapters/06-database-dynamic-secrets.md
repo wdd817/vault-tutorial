@@ -36,14 +36,14 @@ docker compose exec mysql mysql -uroot -prootpw -e "SELECT VERSION();"
 
 ### 6.2 挂载 database 引擎并配置连接
 
-```powershell
+```bash
 vault secrets enable database
 
-vault write database/config/mysql-app `
-  plugin_name=mysql-database-plugin `
-  connection_url="root:rootpw@tcp(127.0.0.1:3306)/" `
-  allowed_roles="app-readonly" `
-  username=root `
+vault write database/config/mysql-app \
+  plugin_name=mysql-database-plugin \
+  connection_url="root:rootpw@tcp(127.0.0.1:3306)/" \
+  allowed_roles="app-readonly" \
+  username=root \
   password=rootpw
 ```
 
@@ -63,17 +63,17 @@ Success! Data written to: database/config/mysql-app
 > **实测会遇到的真实报错**：如果后端连不上，`vault write database/config/...` 会**直接失败**，因为 Vault 会立刻验证连接：
 > ```text
 > Code: 400. Errors:
-> * error creating database object: error verifying - ping: dial tcp 127.0.0.1:3306: connectex: No connection could be made because the target machine actively refused it.
+> * error creating database object: error verifying - ping: dial tcp 127.0.0.1:3306: connect: connection refused
 > ```
 > 这是好事：配置阶段就把"连不上"暴露出来，而不是等到应用启动才发现。
 
 ### 6.3 定义角色：申请账号时动态执行的 SQL
 
-```powershell
-vault write database/roles/app-readonly `
-  db_name=mysql-app `
-  creation_statements="CREATE USER '{{name}}'@'%' IDENTIFIED BY '{{password}}'; GRANT SELECT ON orders.* TO '{{name}}'@'%';" `
-  default_ttl=1h `
+```bash
+vault write database/roles/app-readonly \
+  db_name=mysql-app \
+  creation_statements="CREATE USER '{{name}}'@'%' IDENTIFIED BY '{{password}}'; GRANT SELECT ON orders.* TO '{{name}}'@'%';" \
+  default_ttl=1h \
   max_ttl=24h
 ```
 
@@ -90,7 +90,7 @@ max_ttl=24h      → 续期最多续到 24 小时，之后必须重新申请
 
 验证角色配置：
 
-```powershell
+```bash
 vault read database/roles/app-readonly
 ```
 
@@ -109,7 +109,7 @@ rollback_statements      []
 
 ### 6.4 申请一个账号（真正的动态密钥）
 
-```powershell
+```bash
 vault read database/creds/app-readonly
 ```
 
@@ -131,7 +131,7 @@ username           v-token-app-readonly-XyZ9...
 
 拿这个账号真连一次数据库，然后等它过期（或手动撤销）再看一眼：
 
-```powershell
+```bash
 # 撤销这条租约 → Vault 执行 revocation_statements → DROP USER
 vault lease revoke database/creds/app-readonly/AbC123...
 ```
@@ -145,14 +145,14 @@ SELECT user, host FROM mysql.user WHERE user LIKE 'v-token-%';
 
 有些遗留系统的账号是写死在别处的，不能动态创建。这时用 **static role**：Vault 接管它的密码并在固定周期轮换。
 
-```powershell
-vault write database/static-roles/legacy-report `
-  db_name=mysql-app `
-  username=report_user `
+```bash
+vault write database/static-roles/legacy-report \
+  db_name=mysql-app \
+  username=report_user \
   rotation_period=24h
 ```
 
-```powershell
+```bash
 vault read database/static-roles/legacy-report
 vault read database/static-creds/legacy-report    # 每次读取都返回当前密码
 vault write -f database/rotate-role/legacy-report # 手动触发轮换
@@ -173,8 +173,8 @@ path "database/creds/app-readonly" {
 }
 ```
 
-```powershell
-vault policy write app-db-creds .\app-db-creds.hcl
+```bash
+vault policy write app-db-creds ./app-db-creds.hcl
 ```
 
 注意这里**只有 `read`**：应用连"看角色配置"都不需要，更不该有 `database/config/*` 或 `database/roles/*` 的任何权限。
@@ -183,18 +183,18 @@ vault policy write app-db-creds .\app-db-creds.hcl
 
 **PostgreSQL**（把三处替换掉即可）：
 
-```powershell
-vault write database/config/pg-app `
-  plugin_name=postgresql-database-plugin `
-  connection_url="postgresql://{{username}}:{{password}}@127.0.0.1:5432/orders?sslmode=disable" `
-  allowed_roles="app-readonly" `
-  username="postgres" `
+```bash
+vault write database/config/pg-app \
+  plugin_name=postgresql-database-plugin \
+  connection_url="postgresql://{{username}}:{{password}}@127.0.0.1:5432/orders?sslmode=disable" \
+  allowed_roles="app-readonly" \
+  username="postgres" \
   password="rootpw"
 ```
 
 **轮换管理员密码**（让 Vault 自己保管"建号用的管理员密码"）：
 
-```powershell
+```bash
 vault write -f database/rotate-root/mysql-app
 ```
 

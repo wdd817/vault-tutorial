@@ -10,8 +10,8 @@
 
 ### 3.1 排障三连之一：Vault 活着吗
 
-```powershell
-$env:VAULT_ADDR = 'http://127.0.0.1:8200'
+```bash
+export VAULT_ADDR=http://127.0.0.1:8200
 vault status
 ```
 
@@ -27,25 +27,25 @@ Storage Type    inmem    ← 存储类型（inmem = dev 模式，重启即丢）
 如果你看到的不是这张表，而是：
 
 ```text
-Error checking seal status: Get "http://127.0.0.1:8200/v1/sys/seal-status": dial tcp 127.0.0.1:8200: connectex: No connection could be made because the target machine actively refused it.
+Error checking seal status: Get "http://127.0.0.1:8200/v1/sys/seal-status": dial tcp 127.0.0.1:8200: connect: connection refused
 ```
 
 ——服务端没起来，或 `VAULT_ADDR` 写错了，去启动 Vault 的那个窗口看日志。
 
 退出码也有含义：`vault status` 在 **未解封时返回 2**，在 **连不上时返回 1**。脚本里可以直接用：
 
-```powershell
-vault status *> $null
-switch ($LASTEXITCODE) {
-  0 { 'unsealed and ready' }
-  2 { 'sealed' }
-  default { 'unreachable' }
-}
+```bash
+vault status >/dev/null 2>&1
+case $? in
+  0) echo 'unsealed and ready' ;;
+  2) echo 'sealed' ;;
+  *) echo 'unreachable' ;;
+esac
 ```
 
 ### 3.2 排障三连之二：我现在是谁
 
-```powershell
+```bash
 vault token lookup
 ```
 
@@ -78,14 +78,14 @@ type                service
 
 ### 3.3 排障三连之三：这个路径我能做什么
 
-```powershell
+```bash
 vault token capabilities secret/data/hello
 # read
 ```
 
 还可以替**别人**问（需要 root 或相应的 `sys/capabilities` 权限），这在排查"某个服务的 token 为什么读不到"时极其好用：
 
-```powershell
+```bash
 vault token capabilities hvs.CAESIHh8... secret/data/hello
 ```
 
@@ -93,7 +93,7 @@ vault token capabilities hvs.CAESIHh8... secret/data/hello
 
 ### 3.4 第一次读写：看清楚"路径"是什么
 
-```powershell
+```bash
 vault kv put -mount=secret hello message="hello vault" env=dev
 vault kv get -mount=secret hello
 vault kv list -mount=secret
@@ -102,7 +102,7 @@ vault kv delete -mount=secret hello
 
 `vault kv` 是 KV 引擎的**专用子命令**，它会在底下悄悄地把路径加上 `data/` 前缀。等价的原生 API 路径是：
 
-```powershell
+```bash
 vault read secret/data/hello
 ```
 
@@ -117,7 +117,7 @@ metadata    map[created_time:... deletion_time: destroyed:false version:1]
 
 ### 3.5 看看 Vault 里到底挂了哪些"柜子"
 
-```powershell
+```bash
 vault secrets list
 vault auth list
 ```
@@ -149,7 +149,7 @@ token/      token      auth_token_f152e1ef      token based credentials    n/a
 
 ### 3.6 cubbyhole：一个有意思的特例
 
-```powershell
+```bash
 vault write cubbyhole/only-mine value="just for my token"
 vault read cubbyhole/only-mine
 ```
@@ -162,11 +162,11 @@ value    just for my token
 
 cubbyhole 的关键特性：**它以 token 为单位隔离**。换个 token 就看别人的 cubbyhole 了。实测验证一下（alice 是第 5 章会创建的用户，这里先演示现象）：
 
-```powershell
-$env:VAULT_TOKEN = 'root'
+```bash
+export VAULT_TOKEN=root
 vault write cubbyhole/root-only value=secret
 # 换成 alice 的 token 再读
-$env:VAULT_TOKEN = '<alice-token>'
+export VAULT_TOKEN='<alice-token>'
 vault read cubbyhole/root-only
 vault read -field=value cubbyhole/root-only
 ```
@@ -181,7 +181,7 @@ No value found at cubbyhole/root-only
 
 忘了某个路径的参数？不用翻文档：
 
-```powershell
+```bash
 vault path-help secret/data
 ```
 

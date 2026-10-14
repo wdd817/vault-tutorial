@@ -32,7 +32,7 @@ vault debug -duration=2m           # 生成诊断包
 
 ```bash
 vault operator init -key-shares=5 -key-threshold=3
-vault operator unseal <key>
+vault operator unseal '<key>'
 vault operator seal
 vault operator rekey -init -key-shares=5 -key-threshold=3
 vault operator generate-root -init
@@ -74,7 +74,7 @@ vault policy write app-read app-read.hcl
 vault policy read app-read
 vault policy fmt app-read.hcl
 vault policy delete app-read
-vault token capabilities <token> app/data/demo    # 查能力
+vault token capabilities '<token>' app/data/demo    # 查能力
 vault token capabilities app/data/demo            # 查自己
 ```
 
@@ -85,12 +85,12 @@ vault token create -policy=app-read -ttl=20m -display-name=svc
 vault token create -type=batch -policy=app-read -ttl=5m
 vault token create -period=24h -policy=default
 vault token create -use-limit=1 -policy=app-read -ttl=10m
-vault token lookup <token>
-vault token lookup -accessor <accessor>
-vault token renew <token>
-vault token renew -increment=1h <token>
-vault token revoke <token|accessor>
-vault token revoke -mode=orphan <token>
+vault token lookup '<token>'
+vault token lookup -accessor '<accessor>'
+vault token renew '<token>'
+vault token renew -increment=1h '<token>'
+vault token revoke '<token|accessor>'
+vault token revoke -mode=orphan '<token>'
 vault list auth/token/accessors
 ```
 
@@ -101,10 +101,10 @@ vault auth enable approle
 vault write auth/approle/role/ci-runner token_policies=app-read token_ttl=20m token_max_ttl=1h secret_id_ttl=10m secret_id_num_uses=1
 vault read -field=role_id auth/approle/role/ci-runner/role-id
 vault write -f -field=secret_id auth/approle/role/ci-runner/secret-id
-vault write -field=token auth/approle/login role_id=<id> secret_id=<id>
+vault write -field=token auth/approle/login role_id='<id>' secret_id='<id>'
 vault write -wrap-ttl=120s -f auth/approle/role/ci-runner/secret-id
-vault unwrap <wrapping_token>
-vault write auth/approle/role/ci-runner/secret-id-accessor/destroy secret_id_accessor=<acc>
+vault unwrap '<wrapping_token>'
+vault write auth/approle/role/ci-runner/secret-id-accessor/destroy secret_id_accessor='<acc>'
 vault auth enable kubernetes
 vault write auth/kubernetes/config kubernetes_host=... token_reviewer_jwt=... kubernetes_ca_cert=...
 vault auth enable jwt
@@ -123,12 +123,12 @@ vault write database/roles/app-readonly db_name=mysql-app creation_statements=".
 vault read database/creds/app-readonly
 vault write -f database/rotate-root/mysql-app
 vault read database/static-creds/legacy-report
-vault lease lookup <lease_id>
-vault lease renew -increment=1h <lease_id>
-vault lease revoke <lease_id>
+vault lease lookup '<lease_id>'
+vault lease renew -increment=1h '<lease_id>'
+vault lease revoke '<lease_id>'
 vault lease revoke -prefix database/creds/app-readonly
 vault list sys/leases/lookup/auth/token/create
-vault write sys/leases/lookup lease_id=<lease_id>
+vault write sys/leases/lookup lease_id='<lease_id>'
 ```
 
 ### Transit
@@ -136,11 +136,11 @@ vault write sys/leases/lookup lease_id=<lease_id>
 ```bash
 vault secrets enable transit
 vault write -f transit/keys/payments
-vault write -field=ciphertext transit/encrypt/payments plaintext=<base64>
-vault write -field=plaintext  transit/decrypt/payments ciphertext=<vault:v1:...>
-vault write -field=ciphertext transit/rewrap/payments ciphertext=<...>
+vault write -field=ciphertext transit/encrypt/payments plaintext='<base64>'
+vault write -field=plaintext  transit/decrypt/payments ciphertext='<vault:v1:...>'
+vault write -field=ciphertext transit/rewrap/payments ciphertext='<...>'
 vault write -f transit/keys/payments/rotate
-vault write -field=hmac transit/hmac/payments algorithm=sha2-256 input=<base64>
+vault write -field=hmac transit/hmac/payments algorithm=sha2-256 input='<base64>'
 vault write -f transit/datakey/plaintext/payments
 vault read transit/keys/payments
 vault write transit/keys/payments/config deletion_allowed=true
@@ -155,7 +155,7 @@ vault secrets tune -max-lease-ttl=87600h pki
 vault write pki/root/generate/internal common_name="Root CA" ttl=87600h
 vault write pki/roles/web-server allowed_domains=example.internal allow_subdomains=true max_ttl=720h
 vault write pki/issue/web-server common_name=api.example.internal ttl=24h
-vault write pki/revoke serial_number=<serial>
+vault write pki/revoke serial_number='<serial>'
 vault write pki/config/urls issuing_certificates=... crl_distribution_points=...
 vault read -field=certificate pki/cert/crl
 vault write pki/intermediate/generate/internal common_name="Intermediate CA"
@@ -214,7 +214,7 @@ vault read sys/internal/ui/mounts/app/data/demo   # 查看路径解析结果
 | `open /var/run/secrets/...` | K8s 认证未显式提供 CA | 传 `kubernetes_ca_cert` |
 | `batch tokens cannot be renewed` | 对 batch token 续期 | batch 不支持续期，重建 token |
 | `flag provided but not defined` | 参数名写错 | `vault <cmd> -help` |
-| `Command flags must be provided before positional arguments` | flag 位置错（PowerShell 常见） | flag 提前 |
+| `Command flags must be provided before positional arguments` | flag 位置错（Vault CLI 要求 flag 写在位置参数前） | flag 提前 |
 | `invalid character '-' in numeric literal` | CLI 把路径当数字解析（如 `pki/crl/pem`） | 用 `pki/cert/crl` |
 
 ## E. 概念对照：Vault 术语与"传统做法"
@@ -273,7 +273,7 @@ vault read sys/internal/ui/mounts/app/data/demo   # 查看路径解析结果
 
 ## H. 本书的版本基线（再强调一次）
 
-- 全部命令实测于 **Vault v2.1.1（OSS）**，环境为 Windows 11 + PowerShell 7；
+- 全部命令实测于 **Vault v2.1.1（OSS）**，环境为 Linux + Bash；
 - 写作时的受支持版本线：**2.1.x**（2.0.x 与 1.21.x 的标准维护已结束）；
 - 1.21.x 上本教程的命令同样适用，但 2.x 新增的 `agent-registry/` 挂载与 `default-ceiling` 策略不会出现；
 - 涉及企业版能力（Secrets Sync、MCP Server、Agent Registry 高级功能、MFA 等）的地方都已显式标注。

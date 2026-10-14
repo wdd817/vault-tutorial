@@ -12,32 +12,15 @@
 
 推荐用官方发布的二进制包（版本最新、校验和可验证）。本教程使用 **Vault v2.1.1**。
 
-**Windows（winget 最省事）**
-
-```powershell
-winget install --id Hashicorp.Vault -e
-```
-
-> 实测提示：winget 源上的版本可能落后官方一两周（写作时 winget 上是 2.1.0，官方 releases 已是 2.1.1）。要精确控制版本，用下面的手动方式。
-
-**Windows / macOS / Linux（手动下载，推荐用于指定版本）**
-
-```powershell
-# Windows PowerShell 示例：下载 2.1.1 并校验
-$ver = '2.1.1'
-$url = "https://releases.hashicorp.com/vault/$ver/vault_${ver}_windows_amd64.zip"
-Invoke-WebRequest -Uri $url -OutFile "$env:TEMP\vault.zip"
-(Get-FileHash "$env:TEMP\vault.zip" -Algorithm SHA256).Hash
-# 与官方发布的 SHA256SUMS 对比后再解压
-Expand-Archive "$env:TEMP\vault.zip" -DestinationPath "$env:TEMP\vault211" -Force
-```
+**macOS / Linux（手动下载，推荐用于指定版本）**
 
 ```bash
-# Linux (amd64) 等价写法
+# Linux (amd64)；macOS 把文件名里的 linux_amd64 换成 darwin_arm64 / darwin_amd64
 VER=2.1.1
 curl -fsSLo vault.zip "https://releases.hashicorp.com/vault/${VER}/vault_${VER}_linux_amd64.zip"
-sha256sum vault.zip   # 与官方 SHA256SUMS 核对
-unzip -o vault.zip -d /usr/local/bin
+sha256sum vault.zip                 # macOS 用 shasum -a 256 vault.zip
+sudo unzip -o vault.zip -d /usr/local/bin
+vault --version
 ```
 
 **Docker（最干净，适合在服务器上试）**
@@ -49,7 +32,7 @@ docker run --cap-add=IPC_LOCK -e 'VAULT_DEV_ROOT_TOKEN_ID=root' \
 
 ### 2.2 确认版本
 
-```powershell
+```bash
 vault --version
 ```
 
@@ -59,8 +42,8 @@ Vault v2.1.1 (d78bbbe2d2f3d289c1ec29d431071beb23668212), built 2026-09-15T21:21:
 
 ### 2.3 启动 dev 模式
 
-```powershell
-$env:VAULT_DEV_ROOT_TOKEN_ID = 'root'
+```bash
+export VAULT_DEV_ROOT_TOKEN_ID=root
 vault server -dev -dev-no-store-token
 ```
 
@@ -88,10 +71,7 @@ authenticated to the CLI, so you can immediately begin using Vault.
 
 You may need to set the following environment variables:
 
-PowerShell:
-    $env:VAULT_ADDR="http://127.0.0.1:8200"
-cmd.exe:
-    set VAULT_ADDR=http://127.0.0.1:8200
+    $ export VAULT_ADDR='http://127.0.0.1:8200'
 
 The unseal key and root token are displayed below in case you want to
 seal/unseal the Vault or re-authenticate.
@@ -109,9 +89,9 @@ Development mode should NOT be used in production installations!
 
 **新开一个终端**（保持 Vault 前台运行），设置连接信息：
 
-```powershell
-$env:VAULT_ADDR = 'http://127.0.0.1:8200'
-$env:VAULT_TOKEN = 'root'
+```bash
+export VAULT_ADDR=http://127.0.0.1:8200
+export VAULT_TOKEN=root
 vault status
 ```
 
@@ -133,7 +113,7 @@ HA Enabled      false
 
 ### 2.4 冒烟测试
 
-```powershell
+```bash
 vault kv put -mount=secret hello message="hello vault"
 vault kv get -mount=secret hello
 ```
@@ -172,7 +152,7 @@ message    hello vault
 | 不启用审计设备 | 合规环境必须有审计 |
 | 默认只监听 `127.0.0.1`，无 TLS | 生产必须 TLS（监听地址 + 证书） |
 
-`-dev-no-store-token` 的作用是：**不要把 dev 根 token 写进 `~/.vault-token`**。加上它以后，`vault` 命令只依赖 `VAULT_TOKEN` 环境变量，环境更干净，也便于在教程里反复重启。如果你不加这个参数，Vault 会把 token 存到本地 helper 文件（Windows 上是 `%APPDATA%\hashicorp\vault-token` 或 `~/.vault-token`），后续可能会出现"登录了但用的还是旧 token"的困惑。
+`-dev-no-store-token` 的作用是：**不要把 dev 根 token 写进 `~/.vault-token`**。加上它以后，`vault` 命令只依赖 `VAULT_TOKEN` 环境变量，环境更干净，也便于在教程里反复重启。如果你不加这个参数，Vault 会把 token 存到本地 helper 文件（`~/.vault-token`），后续可能会出现"登录了但用的还是旧 token"的困惑。
 
 dev 模式常用参数（`vault server -help` 实测可得）：
 
@@ -184,7 +164,7 @@ dev 模式常用参数（`vault server -help` 实测可得）：
 | `-dev-tls` | 生成临时证书并启用 TLS（用来练 TLS 相关配置） |
 
 > **端口冲突提示（实测遇到的真实报错）**：如果你已经在跑别的 dev 实例，第二个实例会直接退出，日志里是：
-> `Error initializing listener of type tcp: listen tcp 127.0.0.1:8200: bind: Only one usage of each socket address ... is normally permitted.`
+> `Error initializing listener of type tcp: listen tcp 127.0.0.1:8200: bind: address already in use`
 > 解决办法：`-dev-listen-address=127.0.0.1:8400`（换个端口，同时改 `VAULT_ADDR`）。
 
 ## 环境变量速查
@@ -204,7 +184,7 @@ Vault CLI 的全部行为几乎都由环境变量决定，先记住这五个：
 - **重启 dev 实例会清空所有数据。** 这是 in-memory 存储的必然结果，不是 bug。想保留数据请直接跳到第 14 章的非 dev 配置。
 - **`VAULT_ADDR` 不设置时，CLI 默认去 `https://127.0.0.1:8200`**（注意是 https）。dev 模式是 http，所以不设 `VAULT_ADDR` 会得到 TLS 报错，这是新手最常见的第一个报错。
 - **别把 dev 的 `Unseal Key` 和 `Root Token` 抄进任何文档或聊天记录。** 教程里让你写 `root` 只是为了演练方便。
-- **PowerShell 里 flag 必须写在位置参数前面。** 例如 `vault login -field=token -method=userpass username=alice`；写成 `vault login -method=userpass username=alice -field=token` 会报 `Command flags must be provided before positional arguments`。
+- **Vault CLI 要求 flag 写在位置参数前面。** 例如 `vault login -field=token -method=userpass username=alice`；写成 `vault login -method=userpass username=alice -field=token` 会报 `Command flags must be provided before positional arguments`。
 - **确认自己跑的是 2.1.x**：`vault --version`。若在 1.20 或更早，部分章节（Seal、PKI、Agent）的输出会与本教程不一致。
 
 下一章我们在这个环境里把"请求是怎么走的"看一遍。

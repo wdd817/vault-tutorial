@@ -34,7 +34,7 @@ Vault 自己不实现"分布式数据库"，它把**加密后的密文**交给�
 ui = true
 
 storage "raft" {
-  path    = "C:/vault/data"        # 绝对路径！
+  path    = "/vault/data"        # 绝对路径！
   node_id = "vault-1"
 }
 
@@ -48,18 +48,22 @@ cluster_addr = "http://127.0.0.1:8201"
 disable_mlock = true
 ```
 
+> 说明：这里的 `disable_mlock = true` 是为了**免 root 直接跑实验**。生产上应保留 mlock
+> （即去掉这一行或设为 `false`），并给 Vault 进程 `IPC_LOCK` 能力
+> （systemd 里加 `AmbientCapabilities=CAP_IPC_LOCK`）或 root——原因见第 14 章。
+
 启动、初始化、解封的流程与第 14 章完全相同：
 
-```powershell
+```bash
 vault server -config=raft-single.hcl
 vault operator init -key-shares=3 -key-threshold=2
-vault operator unseal <key1>
-vault operator unseal <key2>
+vault operator unseal '<key1>'
+vault operator unseal '<key2>'
 ```
 
 查看 Raft 成员：
 
-```powershell
+```bash
 vault operator raft list-peers
 ```
 
@@ -107,8 +111,8 @@ vault operator raft join https://vault-1.internal:8200
 
 ### 15.4 备份：Raft 快照
 
-```powershell
-vault operator raft snapshot save backup-$(Get-Date -Format yyyyMMdd-HHmm).snap
+```bash
+vault operator raft snapshot save backup-$(date +%Y%m%d-%H%M).snap
 ```
 
 ```text
@@ -135,7 +139,7 @@ No raft cluster configuration found
 
 顺手可以查集群的版本历史（2.x 提供）：
 
-```powershell
+```bash
 vault version-history
 ```
 
@@ -147,7 +151,7 @@ Version  Installation Time     Build Date
 
 检查快照内容（不恢复就能看）：
 
-```powershell
+```bash
 vault operator raft snapshot inspect backup-20260923-2030.snap
 ```
 
@@ -171,7 +175,7 @@ Version       1
 
 ### 15.5 恢复：把快照装回去
 
-```powershell
+```bash
 vault operator raft snapshot restore backup-20260923-2030.snap
 ```
 
@@ -190,11 +194,11 @@ Snapshot restore complete.
 
 `file` 后端没有快照 API，只能靠**文件系统级备份**：
 
-```powershell
+```bash
 # 停服（或至少暂停写入）后打包数据目录
-Stop-Service vault
-Compress-Archive -Path C:\vault\data\* -DestinationPath C:\backup\vault-file-20260923.zip
-Start-Service vault
+sudo systemctl stop vault
+sudo tar czf /backup/vault-file-20260923.tar.gz -C /vault/data .
+sudo systemctl start vault
 ```
 
 务必同时保存：

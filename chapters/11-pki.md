@@ -16,11 +16,11 @@ Vault 的 PKI 引擎是一个**内置的 CA**：它签发、吊销证书，并�
 
 ### 11.1 生成根 CA
 
-```powershell
+```bash
 vault secrets enable pki
 vault secrets tune -max-lease-ttl=87600h pki      # 10 年
-vault write pki/root/generate/internal `
-  common_name="example.internal Root CA" `
+vault write pki/root/generate/internal \
+  common_name="example.internal Root CA" \
   ttl=87600h
 ```
 
@@ -46,12 +46,12 @@ serial_number    50:c6:1a:f1:71:3a:49:97:c2:05:19:90:30:8d:31:55:99:10:09:f2
 
 角色决定"能签什么证书"：
 
-```powershell
-vault write pki/roles/web-server `
-  allowed_domains="example.internal" `
-  allow_subdomains=true `
-  max_ttl=720h `
-  key_type=rsa `
+```bash
+vault write pki/roles/web-server \
+  allowed_domains="example.internal" \
+  allow_subdomains=true \
+  max_ttl=720h \
+  key_type=rsa \
   key_bits=2048
 ```
 
@@ -74,30 +74,32 @@ Success! Data written to: pki/roles/web-server
 
 ### 11.3 签发一张证书
 
-```powershell
+```bash
 vault write pki/issue/web-server common_name="api.example.internal" ttl=24h
 ```
 
 返回里有 `certificate`、`private_key`、`ca_chain`、`serial_number`、`expiration`。用 JSON 格式便于脚本处理：
 
-```powershell
-$cert = (vault write -format=json pki/issue/web-server common_name="web.example.internal" ttl=24h | ConvertFrom-Json).data
-$cert.serial_number      # 15:c6:77:c6:0d:33:53:04:...
-$cert.ca_chain.Count     # 1（本例是自签根，直接签叶子）
-$cert.private_key_type   # rsa
+```bash
+CERT_JSON=$(vault write -format=json pki/issue/web-server common_name="web.example.internal" ttl=24h)
 
-$cert.certificate | Set-Content .\web.crt -Encoding ascii
-$cert.private_key | Set-Content .\web.key -Encoding ascii
+echo "$CERT_JSON" | jq -r '.data.serial_number'      # 15:c6:77:c6:0d:33:53:04:...
+echo "$CERT_JSON" | jq -r '.data.ca_chain | length'  # 1（本例是自签根，直接签叶子）
+echo "$CERT_JSON" | jq -r '.data.private_key_type'   # rsa
+
+echo "$CERT_JSON" | jq -r '.data.certificate' > web.crt
+echo "$CERT_JSON" | jq -r '.data.private_key' > web.key
 ```
 
-> **Windows 提示**：用 `Set-Content -Encoding ascii` 写出的 PEM 是 CRLF 换行，多数工具能接受；如果某个工具报"格式错误"，把文件转成 LF 再试。
+> **换行提示**：`> web.crt` 写出的是 LF 换行，绝大多数工具都能接受；如果某个工具报"格式错误"，先用 `file web.crt` 看是不是被转成了 CRLF，必要时 `sed -i 's/\r$//' web.crt` 转成 LF。
 
 ### 11.4 吊销与 CRL
 
 按序列号吊销：
 
-```powershell
-vault write pki/revoke serial_number=$($cert.serial_number)
+```bash
+SERIAL=$(echo "$CERT_JSON" | jq -r '.data.serial_number')    # 证书序列号（上一步签发时拿到的）
+vault write pki/revoke serial_number="$SERIAL"
 ```
 
 ```text
@@ -110,17 +112,18 @@ state                      revoked
 
 下载 CRL（供下游服务校验吊销状态）：
 
-```powershell
-vault read -field=certificate pki/cert/crl | Set-Content .\crl.pem -Encoding ascii
+```bash
+vault read -format=json pki/cert/crl > crl.json
+jq -r '.data.certificate' crl.json > crl.pem
 ```
 
 > 注意是 **`pki/cert/crl`**（PEM 格式的 CRL）。`vault read pki/crl/pem` 这种写法在 CLI 里会被当成数字比较而报错（`invalid character '-' in numeric literal`）。
 
 配置 AIA / CRL 分发点，让下游能自动找到吊销列表：
 
-```powershell
-vault write pki/config/urls `
-  issuing_certificates="http://127.0.0.1:8200/v1/pki/ca" `
+```bash
+vault write pki/config/urls \
+  issuing_certificates="http://127.0.0.1:8200/v1/pki/ca" \
   crl_distribution_points="http://127.0.0.1:8200/v1/pki/crl"
 ```
 
@@ -134,7 +137,7 @@ vault write pki/config/urls `
 
 ### 11.5 域名越权会被拦下
 
-```powershell
+```bash
 vault write pki/issue/web-server common_name="evil.example.com" ttl=24h
 ```
 
@@ -172,8 +175,8 @@ path "pki/issue/web-server" {
 }
 ```
 
-```powershell
-vault policy write pki-issuer .\pki-issuer.hcl
+```bash
+vault policy write pki-issuer pki-issuer.hcl
 ```
 
 应用侧只需要这一条。**绝对不要**把 `pki/root/*`、`pki/roles/*`、`pki/intermediate/*` 给业务服务。
@@ -210,9 +213,9 @@ Agent 会在证书接近过期时**自动重新签发并重写文件**，配合 
 > * permission denied
 > ```
 > 正确做法是给这个角色同时挂上"读配置"和"签发证书"两个策略，例如：
-> ```powershell
-> vault write auth/approle/role/nginx-agent `
->   token_policies="app-read,pki-issuer" `
+> ```bash
+> vault write auth/approle/role/nginx-agent \
+>   token_policies="app-read,pki-issuer" \
 >   token_ttl=20m token_max_ttl=1h
 > ```
 

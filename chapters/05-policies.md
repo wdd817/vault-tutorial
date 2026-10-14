@@ -19,8 +19,9 @@ Vault 的答案是一份 **HCL/JSON 策略文件**。本章把策略的语法、
 
 ### 5.1 最小可用策略：只读一个路径
 
-```powershell
-$policy = @'
+```bash
+# Linux/macOS 下写出来就是 UTF-8 无 BOM，可以放心落盘再上传
+cat > app-read.hcl <<'EOF'
 path "app/data/demo" {
   capabilities = ["read"]
 }
@@ -28,8 +29,8 @@ path "app/data/demo" {
 path "app/metadata/demo" {
   capabilities = ["read", "list"]
 }
-'@
-$policy | vault policy write app-read -
+EOF
+vault policy write app-read app-read.hcl
 ```
 
 ```text
@@ -40,7 +41,7 @@ Success! Uploaded policy: app-read
 
 用 `vault kv` 自己的提示来"反推"策略，是本章最实用的技巧——`-output-policy` 会打印**满足这次操作所需的最小策略**：
 
-```powershell
+```bash
 vault kv get -mount=app -output-policy demo
 ```
 
@@ -50,7 +51,7 @@ path "app/data/demo" {
 }
 ```
 
-```powershell
+```bash
 vault kv put -mount=app -output-policy demo password=x
 ```
 
@@ -60,7 +61,7 @@ path "app/data/demo" {
 }
 ```
 
-```powershell
+```bash
 vault kv list -mount=app -output-policy
 ```
 
@@ -74,15 +75,15 @@ path "app/metadata" {
 
 ### 5.2 挂上身份并验证
 
-```powershell
+```bash
 vault auth enable userpass
 vault write auth/userpass/users/alice password=alice-pw policies=app-read
 ```
 
-```powershell
+```bash
 # 用 alice 登录并拿到她的 token
-$aliceToken = vault login -field=token -method=userpass username=alice password=alice-pw
-$env:VAULT_TOKEN = $aliceToken
+ALICE_TOKEN=$(vault login -field=token -method=userpass username=alice password=alice-pw)
+export VAULT_TOKEN=$ALICE_TOKEN
 
 vault kv get -mount=app demo
 ```
@@ -100,7 +101,7 @@ username    demo
 
 越权访问会被明确拒绝：
 
-```powershell
+```bash
 vault kv get -mount=app db/prod
 ```
 
@@ -120,11 +121,11 @@ Code: 403. Errors:
 
 用 root 替 alice 做能力查询（排障必备）：
 
-```powershell
-$env:VAULT_TOKEN = 'root'
-vault token capabilities $aliceToken app/data/demo      # read
-vault token capabilities $aliceToken app/data/db/prod   # deny
-vault token capabilities $aliceToken app/metadata/demo  # list, read
+```bash
+export VAULT_TOKEN=root
+vault token capabilities $ALICE_TOKEN app/data/demo      # read
+vault token capabilities $ALICE_TOKEN app/data/db/prod   # deny
+vault token capabilities $ALICE_TOKEN app/metadata/demo  # list, read
 ```
 
 ### 5.3 路径匹配：`+` 与 `*`
@@ -138,8 +139,8 @@ vault token capabilities $aliceToken app/metadata/demo  # list, read
 
 实测：
 
-```powershell
-$wildcard = @'
+```bash
+cat > wildcard-demo.hcl <<'EOF'
 path "kvteam/+/config" {
   capabilities = ["read"]
 }
@@ -147,12 +148,12 @@ path "kvteam/+/config" {
 path "kvteam/*" {
   capabilities = ["list"]
 }
-'@
-$wildcard | vault policy write wildcard-demo -
-$t = vault token create -policy=wildcard-demo -ttl=10m -field=token
-vault token capabilities $t kvteam/a/config      # read
-vault token capabilities $t kvteam/a/b/config    # list
-vault token capabilities $t kvteam/a             # list
+EOF
+vault policy write wildcard-demo wildcard-demo.hcl
+TOKEN=$(vault token create -policy=wildcard-demo -ttl=10m -field=token)
+vault token capabilities $TOKEN kvteam/a/config      # read
+vault token capabilities $TOKEN kvteam/a/b/config    # list
+vault token capabilities $TOKEN kvteam/a             # list
 ```
 
 注意第三条：`kvteam/a` 只命中 `kvteam/*` 的 `list`，不会命中 `+/config` 的 `read`。**`*` 是"前缀通配"，不是"递归目录通配"**——它同时也匹配中间层级的路径。
@@ -174,8 +175,8 @@ vault token capabilities $t kvteam/a             # list
 
 **优先级规则（实测验证）：`deny` 永远赢。**
 
-```powershell
-$denyWins = @'
+```bash
+cat > deny-wins.hcl <<'EOF'
 path "app/data/secret-x" {
   capabilities = ["deny"]
 }
@@ -183,11 +184,11 @@ path "app/data/secret-x" {
 path "app/data/*" {
   capabilities = ["read", "update"]
 }
-'@
-$denyWins | vault policy write deny-wins -
-$t = vault token create -policy=deny-wins -ttl=10m -field=token
-vault token capabilities $t app/data/secret-x   # deny
-vault token capabilities $t app/data/demo       # read, update
+EOF
+vault policy write deny-wins deny-wins.hcl
+TOKEN=$(vault token create -policy=deny-wins -ttl=10m -field=token)
+vault token capabilities $TOKEN app/data/secret-x   # deny
+vault token capabilities $TOKEN app/data/demo       # read, update
 ```
 
 ```text
@@ -203,13 +204,13 @@ read, update
 
 有些 `sys/` 端点被 Vault 保护，必须显式给 `sudo`。典型例子是"值班同事要能紧急批量撤销租约"：
 
-```powershell
-$leaseAdmin = @'
+```bash
+cat > lease-admin.hcl <<'EOF'
 path "sys/leases/revoke-prefix/*" {
   capabilities = ["sudo", "update"]
 }
-'@
-$leaseAdmin | vault policy write lease-admin -
+EOF
+vault policy write lease-admin lease-admin.hcl
 ```
 
 实测对照：给 `sudo` 时命令成功；去掉 `sudo` 只留 `update` 则被拒绝：
@@ -228,13 +229,13 @@ Code: 403. Errors:
 
 当 CI 有成百上千个 job 时，为每个 job 写一份策略不现实。Vault 允许在策略路径里用**模板变量**，取值来自登录身份（identity）：
 
-```powershell
-$template = @'
+```bash
+cat > ci-template.hcl <<'EOF'
 path "ci/data/{{identity.entity.aliases.auth_approle_12345678.name}}/*" {
   capabilities = ["create", "read", "update", "delete", "list"]
 }
-'@
-$template | vault policy write ci-template -
+EOF
+vault policy write ci-template ci-template.hcl
 vault policy read ci-template
 ```
 
@@ -254,7 +255,7 @@ path "ci/data/{{identity.entity.aliases.auth_approle_12345678.name}}/*" {
 
 两个"不写也会有"的策略，值得认识：
 
-```powershell
+```bash
 vault policy list
 ```
 
@@ -270,23 +271,23 @@ root
 
 ### 5.8 策略的工程化：格式化与验证
 
-```powershell
-vault policy fmt .\app-read.hcl      # 统一缩进（只改本地文件）
-vault policy write app-read .\app-read.hcl
+```bash
+vault policy fmt ./app-read.hcl      # 统一缩进（只改本地文件）
+vault policy write app-read ./app-read.hcl
 vault policy read app-read
 vault policy delete app-read
 ```
 
-> **实测踩坑：Windows 上别用带 BOM 的 UTF-8 写策略文件。** 用 `Set-Content -Encoding utf8`（Windows PowerShell 5.1）写出的文件会在开头插入 `EF BB BF`，Vault 解析时报：
+> **实测踩坑：从外部拷过来的策略文件可能带 BOM。** Linux/macOS 下自己写出的策略文件默认就是 UTF-8 无 BOM（`cat > app-read.hcl <<'EOF' ... EOF` 写出来的一定干净），直接 `vault policy write` 就行；但如果文件是别人用会写 BOM 的编辑器保存后拷过来的，开头可能混进 `EF BB BF`，Vault 解析时会报：
 > ```text
 > failed to parse policy: At 1:1: illegal char
 > ```
-> 三种解法任选：
-> 1. 用 PowerShell 7 的 `Set-Content -Encoding utf8NoBOM`；
-> 2. 用 `[IO.File]::WriteAllText($path, $text, (New-Object System.Text.UTF8Encoding($false)))`；
-> 3. **最省事**：直接把内容通过管道喂给 Vault，不落盘：
->    ```powershell
->    $policy | vault policy write app-read -
+> 排查与修复：
+> 1. 看开头三个字节：`head -c 3 app-read.hcl | xxd` 打出 `efbb bf` 就是带 BOM；
+> 2. 去掉 BOM：`sed -i '1s/^\xEF\xBB\xBF//' app-read.hcl`；
+> 3. **最省事**：把内容从标准输入喂给 Vault，不落盘：
+>    ```bash
+>    vault policy write app-read - < app-read.hcl
 >    ```
 
 把策略文件放进 Git，并在 CI 里做两件事：

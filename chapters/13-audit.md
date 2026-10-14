@@ -12,7 +12,7 @@ Vault 的审计设备（audit device）就是为此存在的。它的定位是�
 
 ### 13.1 打开一个文件审计设备
 
-```powershell
+```bash
 vault audit list
 ```
 
@@ -22,15 +22,15 @@ No audit devices are enabled.
 
 （注意：没有审计设备时，`vault audit list` 会打印这行并**返回退出码 2**，脚本里别把它当成致命错误。）
 
-```powershell
-vault audit enable file file_path="C:\vault\audit.log"
+```bash
+vault audit enable file file_path=/var/log/vault-audit.log
 ```
 
 ```text
 Success! Enabled the file audit device at: file/
 ```
 
-```powershell
+```bash
 vault audit list
 ```
 
@@ -42,25 +42,25 @@ file/    file    n/a
 
 带详细配置的查看：
 
-```powershell
+```bash
 vault audit list -detailed
 ```
 
 ```text
 Path     Type    Description    Replication    Options
 ----     ----    -----------    -----------    -------
-file/    file    n/a            replicated     file_path=C:\vault\audit.log
+file/    file    n/a            replicated     file_path=/var/log/vault-audit.log
 ```
 
 > **注意**：审计设备**按路径**管理，`vault audit enable file ...` 默认落在 `file/`。第二次在同名路径启用会失败（`path already in use`）；想挂多个设备用 `-path`：
-> ```powershell
-> vault audit enable -path=file2 file file_path="D:\audit\vault2.log"
+> ```bash
+> vault audit enable -path=file2 file file_path=/var/log/vault-audit2.log
 > ```
-> （`-path` 是命令的 flag，必须写在设备类型 `file` **前面**——这是 PowerShell/CLI 的通用规则。）
+> （`-path` 是命令的 flag，必须写在设备类型 `file` **前面**——这是 Vault CLI（Go flag 解析）自身的规则，与操作系统、shell 无关。）
 
 ### 13.2 看一眼审计日志长什么样
 
-```powershell
+```bash
 vault kv put -mount=app audit-demo password=topsecret
 vault kv get -mount=app audit-demo
 ```
@@ -111,14 +111,14 @@ audit lines=8  raw-secret-present=False  hmac-present=True
 
 ### 13.3 其他审计设备
 
-```powershell
-# syslog（Linux/macOS 常见，Windows 不支持）
+```bash
+# syslog（Linux/macOS 常见）
 vault audit enable syslog tag="vault" facility="AUTH"
 
 # socket（发到远端日志收集器，例如 Fluentd / Vector）
 vault audit enable socket address="10.0.0.9:8200" socket_type="tcp" log_raw=false
 
-# 多设备并行：`vault audit enable -path=file2 file file_path=/var/log/vault2.log`
+# 多设备并行：`vault audit enable -path=file2 file file_path=/var/log/vault-audit2.log`
 ```
 
 三种设备的取舍：
@@ -133,7 +133,7 @@ vault audit enable socket address="10.0.0.9:8200" socket_type="tcp" log_raw=fals
 
 实测：
 
-```powershell
+```bash
 vault audit disable file
 ```
 
@@ -153,7 +153,7 @@ Success! Disabled audit device (if it was enabled) at: file/
 
 ### 13.5 审计日志的运维
 
-- **轮转**：Vault 不会自动轮转 `file` 设备的日志。用 `logrotate`（Linux）或计划任务（Windows）+ **`SIGHUP`**（`kill -HUP <pid>`）让 Vault 重新打开文件句柄。
+- **轮转**：Vault 不会自动轮转 `file` 设备的日志。用 `logrotate` + **`SIGHUP`**（`kill -HUP <pid>`）让 Vault 重新打开文件句柄。
 - **权限**：日志文件含路径与操作元数据（虽无明文密钥），应按敏感数据管理，限制读取。
 - **容量**：每个请求两条 JSON（request + response），高频场景下量很大。先估算再决定 `socket` 收集还是本地落盘。
 - **`log_raw`**：设为 `true` 会**记录未哈希的原始值**（包括密钥明文）。除非有强合规要求且已确保日志通道安全，否则**保持 false**。

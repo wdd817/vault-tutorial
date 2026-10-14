@@ -16,7 +16,7 @@
 
 ## 版本校准（重要）
 
-本教程的所有命令都在 **Vault v2.1.1** 上逐条实测（Windows 11 + PowerShell 7）：
+本教程的所有命令都在 **Vault v2.1.1** 上逐条实测（Linux + Bash）：
 
 ```text
 Vault v2.1.1 (d78bbbe2d2f3d289c1ec29d431071beb23668212), built 2026-09-15T21:21:56Z
@@ -40,7 +40,7 @@ Vault v2.1.1 (d78bbbe2d2f3d289c1ec29d431071beb23668212), built 2026-09-15T21:21:
 
 ## 需要准备什么
 
-- 一台可以装软件的机器（Windows / macOS / Linux 均可，本教程命令默认给 Windows PowerShell 写法，附 Linux/macOS 差异说明）；
+- 一台可以装软件的机器（Linux / macOS 均可，本教程命令默认给 Bash 写法）；
 - 可选：Docker Desktop（第 6 章的 MySQL 实验需要它，其他章节不需要）；
 - 大约 2 小时，以及一个**只用于练习**的环境。
 
@@ -89,7 +89,7 @@ Vault v2.1.1 (d78bbbe2d2f3d289c1ec29d431071beb23668212), built 2026-09-15T21:21:
 ## 关于本书的写作与验证方式
 
 - 所有命令都先在本地 Vault 2.1.1 上跑过；正文里贴出的输出是真实回显（只替换了 token/key 这类敏感串）。
-- 教程默认在 Windows PowerShell 下运行，因为 Windows 下有几个**特有的坑**（例如 `vault login -method=userpass -field=token username=...` 里 flag 必须写在位置参数前面、`@file` 参数语法在 PowerShell 里不可用）。这些坑在正文里都会标出来并给替代写法。
+- 教程默认在 Linux / macOS 的 **Bash** 下运行，所有命令都可以直接复制粘贴。涉及 Vault CLI 自身的规则（例如 flag 必须写在位置参数之前）会在正文里单独说明。
 - 生产环境请以 [官方文档](https://developer.hashicorp.com/vault/docs) 为准；本教程的目标是让你先"跑起来、看明白"，再去看官方文档时不再迷路。
 
 ## Web 版打包（可直接发包）
@@ -113,7 +113,7 @@ node tools/serve.mjs         # 本地预览 → http://127.0.0.1:8080
   已附带 `netlify.toml`、`vercel.json`、`Dockerfile` 三个即用配置，不需要可以直接删除。
 - **离线可读**：全部用相对路径，直接双击 `index.html` 也能正常翻阅；只有站内搜索依赖
   `fetch` 读取 `assets/search-index.json`，在 `file://` 下会被浏览器拦截并给出友好提示。
-- **构建期自检**：高亮渲染做了逐字节往返校验（317 个代码块），行内格式做了渲染回归检查，
+- **构建期自检**：高亮渲染做了逐字节往返校验（315 个代码块），行内格式做了渲染回归检查，
   任何一项不通过就直接以非零退出码失败，避免把内容损坏的产物发出去。
 - **改完自动上线**：推送到 `main` 后，GitHub Actions 会自动重新构建、跑校验、发布到 Pages
   （见 `.github/workflows/pages.yml`）。流水线里还有一道额外关卡：拒绝任何以 `/` 开头的资源引用，
@@ -125,12 +125,12 @@ node tools/serve.mjs         # 本地预览 → http://127.0.0.1:8080
 {
   "pages": 18,
   "headings": 219,
-  "codeBlocks": 317,
-  "highlightRoundTripOK": 317,
+  "codeBlocks": 315,
+  "highlightRoundTripOK": 315,
   "inlineRenderOK": 18,
   "searchDocs": 18,
-  "searchChunks": 732,
-  "totalBytes": 637833
+  "searchChunks": 718,
+  "totalBytes": 636094
 }
 ```
 

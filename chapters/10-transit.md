@@ -12,7 +12,7 @@ Transit 引擎的答案是：**密钥永远不离开 Vault，加解密变成一�
 
 ### 10.1 挂载引擎并创建密钥
 
-```powershell
+```bash
 vault secrets enable transit
 vault write -f transit/keys/payments
 vault read transit/keys/payments
@@ -46,11 +46,11 @@ type                      aes256-gcm96
 
 Transit 的输入输出都是 **base64**：
 
-```powershell
-$pt = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes('4111-1111-1111-1111'))
+```bash
+PT=$(printf '%s' '4111-1111-1111-1111' | base64)
 
-$ct = vault write -field=ciphertext transit/encrypt/payments plaintext=$pt
-$ct
+CT=$(vault write -field=ciphertext transit/encrypt/payments plaintext="$PT")
+echo "$CT"
 ```
 
 ```text
@@ -61,8 +61,8 @@ vault:v1:ZSlqoSqB2cf3BhBBOjHSc1f+PfFbxGhhk6WXH70B7cW5gcE/0ICTDOJXYLAq7dk=
 
 解密：
 
-```powershell
-vault write -field=plaintext transit/decrypt/payments ciphertext=$ct
+```bash
+vault write -field=plaintext transit/decrypt/payments ciphertext="$CT"
 ```
 
 ```text
@@ -71,8 +71,8 @@ NDExMS0xMTExLTExMTEtMTExMQ==
 
 解码回原文验证：
 
-```powershell
-[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('NDExMS0xMTExLTExMTEtMTExMQ=='))
+```bash
+printf '%s' 'NDExMS0xMTExLTExMTEtMTExMQ==' | base64 -d
 # 4111-1111-1111-1111
 ```
 
@@ -80,8 +80,8 @@ NDExMS0xMTExLTExMTEtMTExMQ==
 
 如果只是要"判断两条数据是不是同一个"（去重、比对、完整性校验），根本不需要解密：
 
-```powershell
-vault write -field=hmac transit/hmac/payments algorithm=sha2-256 input=$pt
+```bash
+vault write -field=hmac transit/hmac/payments algorithm=sha2-256 input="$PT"
 ```
 
 ```text
@@ -92,7 +92,7 @@ vault:v2:1UcZ1sbH64UW5aU9iP+mIDufEFMQFMu8OJ2fAPVf0+Y=
 
 ### 10.4 密钥轮换：不用重新加密历史数据
 
-```powershell
+```bash
 vault write -f transit/keys/payments/rotate
 vault read -field=latest_version transit/keys/payments
 # 2
@@ -104,8 +104,8 @@ vault read -field=latest_version transit/keys/payments
 - **旧数据仍然是 `vault:v1:...`，依旧可以解密**（因为 Vault 保留了历史密钥版本）；
 - 想统一升级到新版本，用 `rewrap`——它**解密再加密，但明文从不离开 Vault**：
 
-```powershell
-vault write -field=ciphertext transit/rewrap/payments ciphertext=$ct
+```bash
+vault write -field=ciphertext transit/rewrap/payments ciphertext="$CT"
 # vault:v2:...
 ```
 
@@ -115,7 +115,7 @@ vault write -field=ciphertext transit/rewrap/payments ciphertext=$ct
 
 对**大对象**（文件、日志、备份），不要直接走 Transit API（每次都要网络往返）。用 `datakey` 拿一把数据密钥，本地加密，只把"被 Vault 加密过的数据密钥"存起来：
 
-```powershell
+```bash
 vault write -f transit/datakey/plaintext/payments
 ```
 
@@ -142,9 +142,11 @@ plaintext      ZBQFFnhHk9UFdZK78AvlabfAZ7H2ez2s6sBWzul22z0=
 
 一次请求加密多条，减少往返：
 
-```powershell
-$json = '{"batch_input":[{"plaintext":"' + $pt + '"},{"plaintext":"' + $pt + '"}]}'
-$json | vault write transit/encrypt/payments -
+```bash
+cat > payload.json <<EOF
+{"batch_input":[{"plaintext":"$PT"},{"plaintext":"$PT"}]}
+EOF
+vault write transit/encrypt/payments @payload.json
 ```
 
 ```text
@@ -153,7 +155,7 @@ Key              Value
 batch_results    [map[ciphertext:vault:v2:sGgZBI3v... key_version:2 reference:] map[ciphertext:vault:v2:H+hDoG4... key_version:2 reference:]]
 ```
 
-> **Windows 坑**：Vault CLI 的 `@file` 参数语法（`vault write transit/encrypt/payments @payload.json`）在 PowerShell 里会报 `无法识别的标记`。用**标准输入管道**（如上）即可；Bash 下 `@file` 可以正常工作。
+> **`@file` 用法**：Vault CLI 的 `@file` 参数语法（如上 `vault write transit/encrypt/payments @payload.json`）在 Linux/macOS 的 bash 下可以直接用，是最推荐的方式。如果拿到的是别的 shell 的写法、`@file` 被吞掉了，可以改用标准输入：`vault write transit/encrypt/payments - < payload.json`。
 
 ### 10.7 让应用"只能加密，不能解密"
 
@@ -170,15 +172,15 @@ path "transit/decrypt/payments" {
 }
 ```
 
-```powershell
-vault policy write transit-encryptor .\transit-encryptor.hcl
-$t = vault token create -policy=transit-encryptor -ttl=10m -field=token
-$env:VAULT_TOKEN = $t
+```bash
+vault policy write transit-encryptor transit-encryptor.hcl
+TOKEN=$(vault token create -policy=transit-encryptor -ttl=10m -field=token)
+export VAULT_TOKEN=$TOKEN
 
-vault write -field=ciphertext transit/encrypt/payments plaintext=$pt
+vault write -field=ciphertext transit/encrypt/payments plaintext="$PT"
 # ✅ 成功（exit 0）
 
-vault write -field=plaintext transit/decrypt/payments ciphertext=$ct
+vault write -field=plaintext transit/decrypt/payments ciphertext="$CT"
 ```
 
 ```text
@@ -222,7 +224,7 @@ Code: 403. Errors:
 
 ## 踩坑与检查清单
 
-- **输入必须是 base64。** 直接把明文丢进去会报 `failed to decode input`。PowerShell 用 `[Convert]::ToBase64String(...)`。
+- **输入必须是 base64。** 直接把明文丢进去会报 `failed to decode input`。bash 里用 `printf '%s' '明文' | base64`。
 - **别把 `rotate` 当成 `rewrap`。** `rotate` 只影响**新**数据；历史密文需要显式 `rewrap` 才会升级版本。
 - **`min_decryption_version` 是"作废旧版本"的开关**：把它调高，旧密文就再也解不开了。这是**不可逆**的，用于"确认所有历史数据都已升级"之后的收尾。
 - **`allow_plaintext_backup=true` 会让密钥可导出**，出事后影响面完全不同。除非有明确需求，保持 `false`。

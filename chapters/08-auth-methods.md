@@ -17,7 +17,7 @@
 
 **userpass** 用来理解机制最合适——它就是"用户名 + 密码 → token"：
 
-```powershell
+```bash
 vault auth enable userpass
 vault write auth/userpass/users/alice password=alice-pw policies=app-read
 vault list auth/userpass/users
@@ -31,9 +31,9 @@ alice
 
 登录并查看身份：
 
-```powershell
-$token = vault login -field=token -method=userpass username=alice password=alice-pw
-vault token lookup $token
+```bash
+TOKEN=$(vault login -field=token -method=userpass username=alice password=alice-pw)
+vault token lookup "$TOKEN"
 ```
 
 ```text
@@ -43,24 +43,24 @@ policies            [app-read default]
 ttl                 767h59m59s
 ```
 
-> **Windows/PowerShell 坑**：`-field=token` 是 flag，**必须写在位置参数 `username=...` 前面**。写成 `vault login -method=userpass username=alice password=alice-pw -field=token` 会报：
+> **Vault CLI 的通用坑**：`-field=token` 是 flag，**必须写在位置参数 `username=...` 前面**——这是 Vault CLI（Go flag 解析）自身的规则，与操作系统、shell 无关。写成 `vault login -method=userpass username=alice password=alice-pw -field=token` 会报：
 > ```text
 > Command flags must be provided before positional arguments. The following arguments will not be parsed as flags: [-field=token]
 > ```
 
 **生产上不建议用 userpass**：它自带密码库，意味着你要在 Vault 里再维护一套密码和轮换流程。正确做法是接公司已有身份：
 
-```powershell
+```bash
 # LDAP（Active Directory / OpenLDAP）
 vault auth enable ldap
-vault write auth/ldap/config `
-  url="ldaps://ldap.example.internal" `
-  userdn="ou=people,dc=example,dc=internal" `
-  userattr="uid" `
-  groupdn="ou=groups,dc=example,dc=internal" `
-  groupattr="cn" `
-  binddn="cn=vault,ou=service,dc=example,dc=internal" `
-  bindpass="<bind 密码>" `
+vault write auth/ldap/config \
+  url="ldaps://ldap.example.internal" \
+  userdn="ou=people,dc=example,dc=internal" \
+  userattr="uid" \
+  groupdn="ou=groups,dc=example,dc=internal" \
+  groupattr="cn" \
+  binddn="cn=vault,ou=service,dc=example,dc=internal" \
+  bindpass="<bind 密码>" \
   userfilter="(&(uid={{.Username}})(memberOf=cn=vault-users,ou=groups,dc=example,dc=internal))"
 
 # 把 LDAP 组映射成 Vault 策略
@@ -68,16 +68,16 @@ vault write auth/ldap/groups/vault-app-devs policies=app-read
 
 # OIDC（Okta / Azure AD / Google / Keycloak）
 vault auth enable oidc
-vault write auth/oidc/config `
-  oidc_discovery_url="https://example.okta.com" `
-  oidc_client_id="<client id>" `
-  oidc_client_secret="<client secret>" `
+vault write auth/oidc/config \
+  oidc_discovery_url="https://example.okta.com" \
+  oidc_client_id="<client id>" \
+  oidc_client_secret="<client secret>" \
   default_role="developer"
-vault write auth/oidc/role/developer `
-  allowed_redirect_uris="http://localhost:8250/oidc/callback" `
-  user_claim="email" `
-  groups_claim="groups" `
-  policies=app-read `
+vault write auth/oidc/role/developer \
+  allowed_redirect_uris="http://localhost:8250/oidc/callback" \
+  user_claim="email" \
+  groups_claim="groups" \
+  policies=app-read \
   ttl=8h
 ```
 
@@ -94,14 +94,14 @@ AppRole 的核心思路：**把"身份"拆成两个可以分开投递的部分**
 
 搭一个"CI 只读应用密钥"的角色：
 
-```powershell
+```bash
 vault auth enable approle
 
-vault write auth/approle/role/ci-runner `
-  token_policies=app-read `
-  token_ttl=20m `
-  token_max_ttl=1h `
-  secret_id_ttl=10m `
+vault write auth/approle/role/ci-runner \
+  token_policies=app-read \
+  token_ttl=20m \
+  token_max_ttl=1h \
+  secret_id_ttl=10m \
   secret_id_num_uses=1
 ```
 
@@ -109,7 +109,7 @@ vault write auth/approle/role/ci-runner `
 Success! Data written to: auth/approle/role/ci-runner
 ```
 
-```powershell
+```bash
 vault read auth/approle/role/ci-runner
 ```
 
@@ -133,16 +133,16 @@ token_type                 default
 
 拿凭证并登录：
 
-```powershell
-$rid = vault read -field=role_id auth/approle/role/ci-runner/role-id
-$sid = vault write -f -field=secret_id auth/approle/role/ci-runner/secret-id
-$appToken = vault write -field=token auth/approle/login role_id=$rid secret_id=$sid
+```bash
+RID=$(vault read -field=role_id auth/approle/role/ci-runner/role-id)
+SID=$(vault write -f -field=secret_id auth/approle/role/ci-runner/secret-id)
+APP_TOKEN=$(vault write -field=token auth/approle/login role_id="$RID" secret_id="$SID")
 ```
 
 验证它确实只有该有的权限：
 
-```powershell
-$env:VAULT_TOKEN = $appToken
+```bash
+export VAULT_TOKEN=$APP_TOKEN
 vault token lookup
 ```
 
@@ -154,15 +154,15 @@ ttl                 19m59s
 type                service
 ```
 
-```powershell
+```bash
 vault kv get -mount=app demo        # 允许 → 成功
 vault kv get -mount=app db/prod     # 越权 → exit 2, permission denied
 ```
 
 **`secret_id_num_uses=1` 的意义**（实测）：
 
-```powershell
-vault write -field=token auth/approle/login role_id=$rid secret_id=$sid
+```bash
+vault write -field=token auth/approle/login role_id="$RID" secret_id="$SID"
 ```
 
 ```text
@@ -176,7 +176,7 @@ Code: 400. Errors:
 
 **用 response wrapping 安全投递 secret_id**（第 9 章 Vault Agent 也会用到）：
 
-```powershell
+```bash
 vault write -wrap-ttl=120s -f auth/approle/role/ci-runner/secret-id
 ```
 
@@ -192,8 +192,8 @@ wrapped_accessor:                5f44f7f5-16cf-d71d-b691-de5fb2c51d54
 
 收到 wrapping token 的一方执行 `vault unwrap` 才能拿到真正的 `secret_id`：
 
-```powershell
-vault unwrap <wrapping_token>
+```bash
+vault unwrap '<wrapping_token>'
 ```
 
 ```text
@@ -209,8 +209,8 @@ secret_id_ttl         10m
 
 **按 accessor 撤销 secret_id**（正确路径，实测通过）：
 
-```powershell
-vault write auth/approle/role/ci-runner/secret-id-accessor/destroy secret_id_accessor=$sidAcc
+```bash
+vault write auth/approle/role/ci-runner/secret-id-accessor/destroy secret_id_accessor="$SID_ACC"
 ```
 
 ```text
@@ -223,21 +223,21 @@ Success! Data written to: auth/approle/role/ci-runner/secret-id-accessor/destroy
 
 K8s 里每个 Pod 都自动持有一个 **ServiceAccount JWT**。Kubernetes 认证方法就是拿这个 JWT 去换 Vault token：
 
-```powershell
+```bash
 vault auth enable kubernetes
 
-vault write auth/kubernetes/config `
-  kubernetes_host="https://kubernetes.default.svc:443" `
-  token_reviewer_jwt="<reviewer JWT>" `
+vault write auth/kubernetes/config \
+  kubernetes_host="https://kubernetes.default.svc:443" \
+  token_reviewer_jwt="<reviewer JWT>" \
   kubernetes_ca_cert=@ca.crt
 ```
 
-```powershell
-vault write auth/kubernetes/role/webapp `
-  bound_service_account_names=webapp `
-  bound_service_account_namespaces=prod `
-  audience=vault `
-  token_policies=app-read `
+```bash
+vault write auth/kubernetes/role/webapp \
+  bound_service_account_names=webapp \
+  bound_service_account_namespaces=prod \
+  audience=vault \
+  token_policies=app-read \
   token_ttl=20m
 ```
 
@@ -245,7 +245,7 @@ vault write auth/kubernetes/role/webapp `
 Success! Data written to: auth/kubernetes/role/webapp
 ```
 
-```powershell
+```bash
 vault read auth/kubernetes/role/webapp
 ```
 
@@ -278,18 +278,18 @@ Code: 400. Errors:
 
 任何能签发 JWT 的系统（GitHub Actions、GitLab CI、云厂商 workload identity、你的 API 网关）都可以直接作为身份来源：
 
-```powershell
+```bash
 vault auth enable jwt
 
-vault write auth/jwt/config `
-  oidc_discovery_url="https://example.okta.com" `
+vault write auth/jwt/config \
+  oidc_discovery_url="https://example.okta.com" \
   bound_issuer="https://example.okta.com"
 
-vault write auth/jwt/role/ci `
-  role_type=jwt `
-  user_claim=sub `
-  bound_audiences="vault" `
-  token_policies=app-read `
+vault write auth/jwt/role/ci \
+  role_type=jwt \
+  user_claim=sub \
+  bound_audiences="vault" \
+  token_policies=app-read \
   token_ttl=15m
 ```
 
@@ -321,14 +321,14 @@ GitHub Actions 的典型组合是 `oidc_discovery_url="https://token.actions.git
 
 同一个人可能既用 LDAP 登录、又用 OIDC 登录。Vault 的 **identity（实体）** 机制可以把多个 alias 归并到同一个 entity，从而统一挂策略、统一审计：
 
-```powershell
+```bash
 # 概念性流程（需要先存在来自不同 auth 的 alias）
 vault list identity/entity/id
-vault write identity/entity/name/alice `
+vault write identity/entity/name/alice \
   policies=app-read
 # 把 userpass 的别名挂到该实体上
-vault write identity/entity-alias/id/<alias_id> \
-  name=alice canonical_id=<entity_id> mount_accessor=<userpass_accessor>
+vault write identity/entity-alias/id/'<alias_id>' \
+  name=alice canonical_id='<entity_id>' mount_accessor='<userpass_accessor>'
 ```
 
 归并后有两个直接好处：

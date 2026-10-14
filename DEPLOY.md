@@ -18,7 +18,7 @@ ch-01.html … ch-17.html 17 章正文（每章一个独立 HTML）
 assets/
   style.css             全站样式（明暗双主题，含打印样式）
   app.js                侧边目录、页内 TOC、主题切换、复制代码、Ctrl+K 搜索
-  search-index.json     全文搜索索引（18 页 / 732 个片段）
+  search-index.json     全文搜索索引（18 页 / 718 个片段）
   favicon.svg           站点图标
 robots.txt              允许抓取
 .nojekyll               告诉 GitHub Pages 不要跑 Jekyll
@@ -28,7 +28,7 @@ Dockerfile              可选：把包做成 nginx 镜像
 README.txt              给最终用户看的极简说明
 ```
 
-体积：解压后约 **623 KB**，压缩包约 **205 KB**。18 个页面、317 个代码块。
+体积：解压后约 **621 KB**，压缩包约 **205 KB**。18 个页面、315 个代码块。
 
 **零外部依赖**：页面只引用同目录 `assets/` 下的文件，没有任何 CDN、字体或统计脚本。
 正文里指向 `developer.hashicorp.com` 的链接是文档引用，不影响离线浏览。
@@ -93,7 +93,7 @@ git push
 **GitHub Actions**（不是 "Deploy from a branch"）。对应 API：
 
 ```bash
-gh api -X POST repos/<owner>/<repo>/pages -f build_type=workflow
+gh api -X POST repos/'<owner>'/'<repo>'/pages -f build_type=workflow
 ```
 
 想手动触发一次发布：Actions → "Build and deploy to GitHub Pages" → Run workflow

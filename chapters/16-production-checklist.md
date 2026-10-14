@@ -99,14 +99,13 @@
 
 | 症状 | 最可能的原因 | 先做什么 |
 | --- | --- | --- |
-| `connection refused` / TLS 报错 | `VAULT_ADDR` 没设或协议错（默认是 https） | `echo $env:VAULT_ADDR`，确认 http/https 与端口 |
+| `connection refused` / TLS 报错 | `VAULT_ADDR` 没设或协议错（默认是 https） | `echo "$VAULT_ADDR"`，确认 http/https 与端口 |
 | `Code: 503 ... Vault is sealed` | 服务被加封（重启后未解封） | `vault status` → `vault operator unseal` |
 | `Code: 403 permission denied` | 策略路径与实际 API 路径不一致 | 看报错里的 URL；用 `vault token capabilities` 对照 |
 | `Code: 404 unsupported path` | 路径/引擎类型写错（例如 raft 命令用在 file 存储） | 用 `vault path-help <path>` 查真实路由 |
 | KV v2 `kv get` 无数据但退出码 0 | 该版本被**软删除** | 看 metadata 的 `deletion_time`；必要时 `kv undelete` |
 | `Error: check-and-set parameter did not match` | 挂载设置了 `cas_required`，写入没带正确版本 | 先 `kv metadata get` 看 `current_version` |
-| `Command flags must be provided before positional arguments` | PowerShell/CLI 把 flag 写在位置参数之后 | 把 `-field=`、`-mount=` 等提前 |
-| `无法识别的标记 @` | 在 PowerShell 里用了 Bash 的 `@file` 语法 | 改用 `Get-Content -Raw x.json \| vault write <path> -` |
+| `Command flags must be provided before positional arguments` | Vault CLI 要求 flag 写在位置参数之前 | 把 `-field=`、`-mount=` 等提前 |
 | Agent 报 `error creating file sink` / 找不到文件 | 相对路径基于**进程工作目录**而非配置文件目录 | 全部改绝对路径 |
 | `database/config` 写入失败 | 后端连不上（Vault 会立即验证连接） | 先确认数据库可达与凭据正确 |
 | `secret-id/accessor/.../destroy` 返回 404 | AppRole 正确路径是 `secret-id-accessor/destroy` | 参照第 8 章 |
@@ -129,32 +128,35 @@
 
 前面每一章的命令都可以固化成脚本，在预发环境定期跑一遍。最小集合：
 
-```powershell
-# vault-smoke-test.ps1（示意：需要按环境替换地址与身份）
-$env:VAULT_ADDR = 'https://vault.example.internal:8200'
+```bash
+#!/usr/bin/env bash
+# vault-smoke-test.sh（示意：需要按环境替换地址与身份）
+set -euo pipefail
+
+export VAULT_ADDR=https://vault.example.internal:8200
 
 # 1. 服务可用且已解封
-vault status; if ($LASTEXITCODE -ne 0) { throw 'vault unavailable or sealed' }
+vault status >/dev/null || { echo 'vault unavailable or sealed' >&2; exit 1; }
 
 # 2. 关键路径可读（用受限身份，不用 root）
-vault kv get -mount=app demo | Out-Null
-if ($LASTEXITCODE -ne 0) { throw 'app/data/demo unreadable' }
+vault kv get -mount=app demo >/dev/null || { echo 'app/data/demo unreadable' >&2; exit 1; }
 
 # 3. 越权必须被拒
-vault kv get -mount=app db/prod 2>$null
-if ($LASTEXITCODE -eq 0) { throw 'over-permission detected' }
+if vault kv get -mount=app db/prod >/dev/null 2>&1; then
+  echo 'over-permission detected' >&2; exit 1
+fi
 
 # 4. 动态凭据能申请
-vault read database/creds/app-readonly | Out-Null
-if ($LASTEXITCODE -ne 0) { throw 'dynamic creds failed' }
+vault read database/creds/app-readonly >/dev/null || { echo 'dynamic creds failed' >&2; exit 1; }
 
 # 5. 审计设备仍然启用（注意：没有设备时返回的是 {} 且退出码为 0）
-$audit = vault audit list -format=json | ConvertFrom-Json
-if ($audit.PSObject.Properties.Count -eq 0) { throw 'no audit device enabled' }
+[ "$(vault audit list -format=json | jq 'length')" -ne 0 ] \
+  || { echo 'no audit device enabled' >&2; exit 1; }
 
 # 6. Agent 渲染出的密钥文件是最新的
 #    （在你的部署里替换为实际检查）
-'所有冒烟检查通过'
+
+echo '所有冒烟检查通过'
 ```
 
 **把这套脚本接进 CI/定时任务**，你就在"上线之后"仍然持续验证本书讲过的每一条保证。

@@ -14,18 +14,18 @@ Vault Agent 就是干这个的：它是一个本地守护进程，负责 `auto-a
 
 Agent 需要一个能自动登录的身份。用第 8 章的 AppRole：
 
-```powershell
+```bash
 vault auth enable approle
-vault policy write app-read .\app-read.hcl
-vault write auth/approle/role/ci-runner `
-  token_policies=app-read `
-  token_ttl=20m `
-  token_max_ttl=1h `
-  secret_id_ttl=10m `
+vault policy write app-read ./app-read.hcl
+vault write auth/approle/role/ci-runner \
+  token_policies=app-read \
+  token_ttl=20m \
+  token_max_ttl=1h \
+  secret_id_ttl=10m \
   secret_id_num_uses=1
 
-vault read -field=role_id auth/approle/role/ci-runner/role-id | Set-Content .\agent\role-id -NoNewline
-vault write -f -field=secret_id auth/approle/role/ci-runner/secret-id | Set-Content .\agent\secret-id -NoNewline
+vault read -field=role_id auth/approle/role/ci-runner/role-id > agent/role-id
+vault write -f -field=secret_id auth/approle/role/ci-runner/secret-id > agent/secret-id
 ```
 
 ### 9.2 写一份 Agent 配置
@@ -79,21 +79,21 @@ EOT
 
 ### 9.3 跑起来并验证
 
-```powershell
+```bash
 vault agent -log-level=info -config=./agent/config.hcl
 ```
 
-> **Windows/相对路径的两个实测坑**（都会让 Agent 直接启动失败）：
+> **相对路径的两个实测坑**（都会让 Agent 直接启动失败）：
 >
-> 1. **flag 必须在位置参数前**，且 `-config` 建议给绝对路径：
->    `vault agent -log-level=info -config=C:\path\to\agent\config.hcl`
+> 1. **flag 必须在位置参数前**（Vault CLI 的通用规则），且 `-config` 建议给绝对路径：
+>    `vault agent -log-level=info -config=/etc/vault-agent/config.hcl`
 >    如果写成 `vault agent -config=config.hcl -log-level=info`，会报 `Command flags must be provided before positional arguments`。
 > 2. **配置里的相对路径是相对于 Agent 进程的工作目录，不是配置文件所在目录**。工作目录不对会看到：
 >    ```text
->    error creating file sink: error during write check: error opening temp file in dir .lab\agent for writing:
->    open .lab\agent\token.tmp.51e3a71f: The system cannot find the path specified.
+>    error creating file sink: error during write check: error opening temp file in dir .lab/agent for writing:
+>    open .lab/agent/token.tmp.51e3a71f: no such file or directory
 >    ```
->    解决办法：在配置里用绝对路径，或者在正确的目录下启动。
+>    解决办法：在配置里用绝对路径，或者在正确的目录下启动（用 systemd 托管时工作目录默认是 `/`，更应该写绝对路径）。
 
 启动成功后的关键日志：
 
@@ -116,7 +116,7 @@ token sink（实测，内容已脱敏）：
 hvs.CAESII...
 ```
 
-**至此，应用侧只需要 `Get-Content rendered.env` 或 `source rendered.env`，一行代码都不用改。**
+**至此，应用侧只需要 `cat rendered.env` 或 `source rendered.env`，一行代码都不用改。**
 
 ### 9.4 它有"持续工作"的能力
 
@@ -128,10 +128,10 @@ Agent 不是一次性渲染就结束了，它做三件事：
 
 验证"密钥变化自动重渲染"（Agent 还在运行时执行）：
 
-```powershell
+```bash
 vault kv put -mount=app demo username=demo password=rotated-by-ops
-Start-Sleep -Seconds 3
-Get-Content .\agent\rendered.env
+sleep 3
+cat agent/rendered.env
 ```
 
 ```text
@@ -172,7 +172,7 @@ Restart=on-failure
 WantedBy=multi-user.target
 ```
 
-Windows 上可以用 `sc.exe create` 或 NSSM 把同样的命令注册为服务。**注意**：Windows 服务的默认工作目录与交互式终端不同，配置里的所有路径都请写绝对路径。
+Linux 下用 systemd（上面的 unit）托管即可；macOS 上可以用 `launchd` 写一个等价的 plist。**注意**：用 systemd 托管时服务的工作目录默认是 `/`，与交互式终端不同，配置里的所有路径都请写绝对路径。
 
 ### 9.7 Vault Proxy：更"透明"的一种形态
 
@@ -208,7 +208,7 @@ vault proxy -config=proxy/config.hcl
 ## 踩坑与检查清单
 
 - **路径问题排第一**：配置里一律用绝对路径，或用 `-config` 指定绝对路径并在正确的 cwd 下启动。
-- **文件权限要收紧**：`sink` 的 `mode = 0640` 只是起点；在 Linux 上确保文件属主是应用用户，在 Windows 上检查 ACL。
+- **文件权限要收紧**：`sink` 的 `mode = 0640` 只是起点；还要确保文件属主是应用用户（`chown app:app ...`），必要时用 `chmod 0600` 进一步限制，别让密钥文件对同机其他账号可读。
 - **模板语法用 Go template**：`{{ .Data.data.username }}` 中的 `.Data.data` 是 KV v2 的嵌套结构（`data` 里还有 `data`），写错不会报错，只会渲染出空值。
 - **template 默认会"等待依赖就绪"**：依赖的 secret 不存在时 Agent 会重试而不是退出，排查时看日志里的 render 失败信息。
 - **`secret_id` 文件用 `-f` 覆盖前先确认权限**：临时文件不要落在共享目录。

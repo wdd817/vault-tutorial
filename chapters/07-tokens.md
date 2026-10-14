@@ -14,10 +14,10 @@
 
 ### 7.1 先看清楚一个 token 的"户口本"
 
-```powershell
-$env:VAULT_TOKEN = 'root'
-$t = vault token create -policy=app-read -ttl=30m -display-name=svc-api -field=token
-vault token lookup $t
+```bash
+export VAULT_TOKEN=root
+TOKEN=$(vault token create -policy=app-read -ttl=30m -display-name=svc-api -field=token)
+vault token lookup "$TOKEN"
 ```
 
 ```text
@@ -53,9 +53,9 @@ type                service
 
 ### 7.2 TTL 与续期
 
-```powershell
-vault token renew $t
-vault token renew -increment=1h $t   # 请求"再给 1 小时"，但受 max_ttl 约束
+```bash
+vault token renew "$TOKEN"
+vault token renew -increment=1h "$TOKEN"   # 请求"再给 1 小时"，但受 max_ttl 约束
 ```
 
 ```text
@@ -80,9 +80,9 @@ token_duration       30m
 
 #### batch token
 
-```powershell
-$bt = vault token create -type=batch -policy=app-read -ttl=5m -field=token
-$env:VAULT_TOKEN = $bt
+```bash
+BT=$(vault token create -type=batch -policy=app-read -ttl=5m -field=token)
+export VAULT_TOKEN=$BT
 vault token lookup
 ```
 
@@ -113,11 +113,11 @@ type                batch
 
 #### periodic token
 
-```powershell
-$per = vault token create -policy=default -period=24h -field=token
-vault token lookup $per       # creation_ttl 24h, period 24h
-vault token renew $per        # token_duration 仍然是 24h
-vault token renew $per        # 再续还是 24h —— 只要按期续期，它永不过期
+```bash
+PER=$(vault token create -policy=default -period=24h -field=token)
+vault token lookup "$PER"      # creation_ttl 24h, period 24h
+vault token renew "$PER"       # token_duration 仍然是 24h
+vault token renew "$PER"       # 再续还是 24h —— 只要按期续期，它永不过期
 ```
 
 周期 token 是"**永不失效但需要定期露面**"的设计：只要应用/Agent 每 24 小时续一次，token 就长期有效；一旦续期停止（服务下线、被隔离），24 小时后自动失效。这对长期运行的守护进程很友好（第 9 章的 Vault Agent 就是这么用的）。
@@ -128,12 +128,12 @@ vault token renew $per        # 再续还是 24h —— 只要按期续期，它
 
 用当前 token 创建的 token 是它的**子 token**，形成一棵树：
 
-```powershell
+```bash
 # 用 root 建父 token
-$parent = vault token create -policy=app-read -ttl=30m -display-name=parent -field=token
+PARENT=$(vault token create -policy=app-read -ttl=30m -display-name=parent -field=token)
 # 用父 token 建子 token
-$env:VAULT_TOKEN = $parent
-$child = vault token create -policy=app-read -ttl=15m -display-name=child -field=token
+export VAULT_TOKEN=$PARENT
+CHILD_TOKEN=$(vault token create -policy=app-read -ttl=15m -display-name=child -field=token)
 ```
 
 > **注意**：父 token 必须有 `auth/token/create` 的权限（`update`）。只带 `app-read` 的 token 去建子 token 会得到 403：
@@ -146,10 +146,10 @@ $child = vault token create -policy=app-read -ttl=15m -display-name=child -field
 
 撤销父 token 会**连同所有子 token 一起失效**：
 
-```powershell
-$env:VAULT_TOKEN = 'root'
-vault token revoke $parent
-vault token lookup $child
+```bash
+export VAULT_TOKEN=root
+vault token revoke "$PARENT"
+vault token lookup "$CHILD_TOKEN"
 ```
 
 ```text
@@ -163,31 +163,31 @@ Code: 403. Errors:
 
 如果只想撤销父而保留子（较少用，例如"换发父 token 但不影响在跑的子任务"）：
 
-```powershell
-vault token revoke -mode=orphan $p2
-vault token lookup $c2        # 仍然可用
-vault token revoke $c2        # 记得手动收回
+```bash
+vault token revoke -mode=orphan "$P2"
+vault token lookup "$C2"        # 仍然可用
+vault token revoke "$C2"        # 记得手动收回
 ```
 
 ### 7.5 accessor：平时用它，别用 token 本身
 
 `token id` 是一把可以拿来直接用的钥匙；`accessor` 只能用来**查询/续期/撤销**，不能拿它去访问数据。因此日常运维应该只暴露 accessor：
 
-```powershell
-$acc = (vault token lookup -format=json $t | ConvertFrom-Json).data.accessor
-vault token lookup -accessor $acc
-vault token renew -accessor $acc
-vault token revoke -accessor $acc      # 撤销后原 token 立刻失效
-vault list auth/token/accessors        # 列出所有 accessor（需要权限）
+```bash
+ACC=$(vault token lookup -format=json "$TOKEN" | jq -r '.data.accessor')
+vault token lookup -accessor "$ACC"
+vault token renew -accessor "$ACC"
+vault token revoke -accessor "$ACC"     # 撤销后原 token 立刻失效
+vault list auth/token/accessors         # 列出所有 accessor（需要权限）
 ```
 
 这条设计原则在审计和排障时非常重要：**把 accessor 写进工单和日志是安全的，把 token id 写进去等于泄密。**
 
 ### 7.6 一次性 token：`-use-limit`
 
-```powershell
-$one = vault token create -policy=app-read -ttl=10m -use-limit=1 -display-name=one-shot -field=token
-$env:VAULT_TOKEN = $one
+```bash
+ONE=$(vault token create -policy=app-read -ttl=10m -use-limit=1 -display-name=one-shot -field=token)
+export VAULT_TOKEN=$ONE
 vault kv get -mount=app demo    # 第一次：成功
 vault kv get -mount=app demo    # 第二次：失败
 ```
