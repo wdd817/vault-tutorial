@@ -213,7 +213,68 @@ EOF
 vault policy write lease-admin lease-admin.hcl
 ```
 
-实测对照：给 `sudo` 时命令成功；去掉 `sudo` 只留 `update` 则被拒绝：
+这一节的价值全在"**证明了 `sudo` 是硬门槛，而不是装饰**"。下面两步走的验证，第 1 步不产生任何副作用，第 2 步需要在**一次性的 dev Vault** 上做。
+
+#### 第 1 步：用 capabilities 静态查证（随时可做，不会撤销任何东西）
+
+写两份**只差 `sudo` 一个词**的策略，然后问 Vault：同一个路径，我的 token 到底有什么能力？
+
+```bash
+# 对照组：只有 update，没有 sudo
+cat > lease-admin-nosudo.hcl <<'EOF'
+path "sys/leases/revoke-prefix/*" {
+  capabilities = ["update"]
+}
+EOF
+vault policy write lease-admin-nosudo lease-admin-nosudo.hcl
+
+# 两个调用者
+NO_SUDO=$(vault token create -policy=lease-admin-nosudo -ttl=20m -field=token)
+SUDO=$(vault token create -policy=lease-admin -ttl=20m -field=token)
+
+# 同一个路径，能力不同
+vault token capabilities $NO_SUDO sys/leases/revoke-prefix/auth/token/create
+vault token capabilities $SUDO    sys/leases/revoke-prefix/auth/token/create
+```
+
+```text
+update
+sudo, update
+```
+
+> `sudo` 会**原样出现在 capabilities 查询结果里**——这就是"这个策略到底开没开控制面"最便宜的验收方式，CI 里也可以直接断言它（见 5.8）。
+
+#### 第 2 步：动态对照（先备好可弃的 token，再按核按钮）
+
+`revoke-prefix` 是幂等且不可逆的，所以实验设计要防着它把自己也带走：**另建一个带 `sudo` 的 token 当调用者**（别用 root，原因见下面的警告），只把三个可弃 token 当作靶子。
+
+```bash
+# 1. 祭品：三个只用于本次实验的 token，记录完整 token 方便事后逐条验证
+V1=$(vault token create -policy=default -ttl=20m -field=token)
+V2=$(vault token create -policy=default -ttl=20m -field=token)
+V3=$(vault token create -policy=default -ttl=20m -field=token)
+sleep 2   # 给 expiration manager 一点登记租约的时间，否则下面可能列不到
+
+echo "撤销前："
+vault list sys/leases/lookup/auth/token/create
+
+# 2. 对照 A：没有 sudo → 403
+VAULT_TOKEN=$NO_SUDO vault lease revoke -prefix auth/token/create
+echo "exit=$?   ← 权限拒绝时 CLI 返回 2，脚本里可以用它区分'没权限'和'出错'"
+
+# 3. 对照 B：带 sudo → 成功（命令和上面一字不差）
+VAULT_TOKEN=$SUDO vault lease revoke -prefix auth/token/create
+echo "exit=$?"
+
+# 4. 收尾断言：撤销真的落地了吗（用祭品自己的 token 去查，被撤了必然 400）
+for t in $V1 $V2 $V3; do
+  VAULT_TOKEN=$t vault token lookup-self >/dev/null 2>&1 \
+    && echo "FAIL  ${t:0:16}… 还活着" \
+    || echo "ok    ${t:0:16}… 已失效"
+done
+```
+
+实测对照 A：
 
 ```text
 Error revoking leases with prefix auth/token/create: Error making API request.
@@ -223,7 +284,25 @@ Code: 403. Errors:
 	* permission denied
 ```
 
-> ⚠️ **真实演练中的教训**：`vault lease revoke -prefix auth/token/create` 会撤销**该前缀下的所有 token**。我在实验中执行它之后，连自己正在用的 token（以及 dev root token）都被撤销了，环境当场失效。这正是"按前缀撤销"的威力，也正是它需要 `sudo` 的原因。生产上请把这类能力限制到极少数人，并配合审计（第 13 章）。
+实测对照 B（同一条命令，只换了 token）：
+
+```text
+All revocation operations queued successfully!
+```
+
+两句提醒，都是实测踩出来的：
+
+- **返回"queued successfully"不等于"已经撤完"。** 它的语义是"排进撤销队列了"，真正的撤销由 expiration manager 执行。所以收尾要用 `vault token lookup-self`（或 `vault lease lookup`）逐条确认，别只看那句 Success。
+- **`revoke-prefix` 的成败与"前缀下有几条租约"无关。** 前缀为空时同样返回成功——权限检查在撤销逻辑**之前**，这正是我们能用它做安全对照实验的原因。
+
+> ⚠️ **真实演练中的教训（触发条件很重要）**：`vault lease revoke -prefix auth/token/create` 会撤销**该前缀下的所有租约**，包括**正在发起这次调用的那个 token**——因为调用者自己也是 `auth/token/create` 下的一条租约。
+>
+> 我实测过两种情形，结果不一样：
+>
+> - 调用者是**普通子 token**：撤销后它自己被撤，**root token 不受影响**（root 不在该前缀下）；
+> - 调用者**就是 root**（`export VAULT_TOKEN=root`，也就是很多人在 dev 环境里的默认状态）：**root 一起被撤销**，之后所有请求都变成 `403 + invalid token`，环境当场失效，只能重启 Vault。
+>
+> 所以这条命令在生产上要当"核按钮"：只给极少数值班人/自动化，执行前确认精确前缀、确保另有可用身份，并配合审计（第 13 章）。另外别走岔路——`vault lease revoke <单条 lease>` 用的是**另一个路径** `sys/leases/revoke/*`，它同样需要 `sudo`：只给 `update` 一样是 403。这也是 5.5 一开始那份策略容易被写漏的地方。
 
 ### 5.6 模板化策略：让一个策略适配所有团队
 
@@ -321,7 +400,7 @@ vault policy delete app-read
   }
   ```
 - **update 不等于只读**：`transit/encrypt/<key>` 用的是 `update` 能力，别给成 `read`。
-- **`sudo` 是最危险的能力**，只给自动化或极少数值班账号，并确保审计开启。
+- **`sudo` 是最危险的能力**，只给自动化或极少数值班账号，并确保审计开启。两个端点**都**要 `sudo`，一个都不能少：`sys/leases/revoke-prefix/*`（按前缀批量撤销）和 `sys/leases/revoke/*`（撤销单条）。只给 `update` 不给 `sudo`，两者都会 403，验证方法见 5.5。
 - **策略变更不会自动重建 token**：token 的权限在请求时按**当前策略**实时计算，所以改了策略立即生效（不需要重新登录），反过来说——**下线权限时别忘了同时撤销旧 token**（第 7 章）。
 - **验证方式固定为 `vault token capabilities`**：新写一份策略，至少对"该允许的路径"和"该拒绝的路径"各断言一次。
 
