@@ -113,7 +113,7 @@ node tools/serve.mjs         # 本地预览 → http://127.0.0.1:8080
   已附带 `netlify.toml`、`vercel.json`、`Dockerfile` 三个即用配置，不需要可以直接删除。
 - **离线可读**：全部用相对路径，直接双击 `index.html` 也能正常翻阅；只有站内搜索依赖
   `fetch` 读取 `assets/search-index.json`，在 `file://` 下会被浏览器拦截并给出友好提示。
-- **构建期自检**：高亮渲染做了逐字节往返校验（315 个代码块），行内格式做了渲染回归检查，
+- **构建期自检**：高亮渲染做了逐字节往返校验（349 个代码块），行内格式做了渲染回归检查，
   任何一项不通过就直接以非零退出码失败，避免把内容损坏的产物发出去。
 - **改完自动上线**：推送到 `main` 后，GitHub Actions 会自动重新构建、跑校验、发布到 Pages
   （见 `.github/workflows/pages.yml`）。流水线里还有一道额外关卡：拒绝任何以 `/` 开头的资源引用，
@@ -124,13 +124,13 @@ node tools/serve.mjs         # 本地预览 → http://127.0.0.1:8080
 ```json
 {
   "pages": 18,
-  "headings": 219,
-  "codeBlocks": 315,
-  "highlightRoundTripOK": 315,
+  "headings": 221,
+  "codeBlocks": 349,
+  "highlightRoundTripOK": 349,
   "inlineRenderOK": 18,
   "searchDocs": 18,
-  "searchChunks": 718,
-  "totalBytes": 636094
+  "searchChunks": 944,
+  "totalBytes": 750077
 }
 ```
 

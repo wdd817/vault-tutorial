@@ -19,6 +19,7 @@
 VER=2.1.1
 curl -fsSLo vault.zip "https://releases.hashicorp.com/vault/${VER}/vault_${VER}_linux_amd64.zip"
 sha256sum vault.zip                 # macOS 用 shasum -a 256 vault.zip
+sudo apt-get install -y unzip       # 精简系统上可能没有 unzip（macOS 不需要）
 sudo unzip -o vault.zip -d /usr/local/bin
 vault --version
 ```
@@ -82,6 +83,8 @@ Root Token: root
 Development mode should NOT be used in production installations!
 ```
 
+> **`Mlock` 那一行的取值取决于运行环境**：容器或受限环境里常见 `supported: false`，普通 Linux 主机通常是 `true`（`enabled` 则默认都是 `false`，因为 dev 模式不要求锁内存）。它只影响"能否锁定内存、防止被换出"，与本教程其余内容无关。
+
 > **注意**：`Unseal Key` 每次启动 dev 模式都会**重新随机生成**，所以你屏幕上看到的
 > 一定和我这里不一样——上面这串是占位示例，不是固定的。dev 模式的密钥只存在内存里，
 > 进程一停就没了，不需要你抄下来保管。（真实部署里恰恰相反：`operator init` 给出的
@@ -131,11 +134,14 @@ deletion_time      n/a
 destroyed          false
 version            1
 
-====== Data ======
+===== Data =====
 Key        Value
 ---        -----
 message    hello vault
 ```
+
+> 上面这块把两条命令的回显合在一起展示了：`vault kv put` 打印的是 `Secret Path` + `Metadata` 两段，
+> `vault kv get` 会把这两段**再打印一遍**，然后才多出最后的 `Data` 段。你自己跑的时候看到重复的头部是正常的。
 
 看到 `version 1` 就说明你已经在用 KV v2 了（第 4 章的主角）。
 

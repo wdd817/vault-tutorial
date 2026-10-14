@@ -1,5 +1,7 @@
 # 第 17 章 附录：速查表与延伸学习
 
+> **工具依赖**：本书第 7、11、12、16 章的命令用到 `jq`（解析 `-format=json` 的输出）；没有的话先装：`sudo apt-get install -y jq`。
+
 ## A. 环境变量速查
 
 | 变量 | 作用 | 示例 |
@@ -21,12 +23,14 @@
 ```bash
 vault status                       # 解封状态（sealed 时退出码 2）
 vault --version                    # CLI 版本
-vault version-history              # 集群安装过的版本（Vault 2.x）
+vault version-history              # 集群安装过的版本（Vault 1.10+；版本追踪自 1.9.0）
 vault server -dev                  # 开发模式
 vault server -config=prod.hcl      # 生产模式
 vault monitor -log-level=debug     # 流式日志（排障）
 vault debug -duration=2m           # 生成诊断包
 ```
+
+> **注意**：`vault monitor` 只在服务端**确实产生日志**时才有输出——dev 模式默认 info 级别、也不逐请求记录，所以即使你在读写 secret，它也可能一直静默。要它出内容，先调服务端 `log_level` 或挂审计设备（第 13 章）。
 
 ### Seal / Unseal
 
@@ -39,6 +43,10 @@ vault operator generate-root -init
 ```
 
 ### 存储与备份
+
+以下命令需要 Raft 集成存储（第 15 章）。在非 Raft 存储（`file`、dev 模式的 inmem）下，各命令的实测表现并不一样：
+`raft list-peers` 报 `No raft cluster configuration found`（退出码仍是 0）；`raft join` 报 500 `* raft backend not in use`；
+`raft snapshot save` / `restore` 则报 404 `* unsupported path`。
 
 ```bash
 vault operator raft list-peers
@@ -82,14 +90,15 @@ vault token capabilities app/data/demo            # 查自己
 
 ```bash
 vault token create -policy=app-read -ttl=20m -display-name=svc
-vault token create -type=batch -policy=app-read -ttl=5m
+vault token create -type=batch -policy=app-read -ttl=5m   # 必须带 -policy：不带会报 batch tokens cannot be root tokens
 vault token create -period=24h -policy=default
 vault token create -use-limit=1 -policy=app-read -ttl=10m
 vault token lookup '<token>'
 vault token lookup -accessor '<accessor>'
 vault token renew '<token>'
 vault token renew -increment=1h '<token>'
-vault token revoke '<token|accessor>'
+vault token revoke '<token>'
+vault token revoke -accessor '<accessor>'          # accessor 只能用 -accessor 传；当位置参数会静默不生效
 vault token revoke -mode=orphan '<token>'
 vault list auth/token/accessors
 ```
@@ -109,6 +118,7 @@ vault auth enable kubernetes
 vault write auth/kubernetes/config kubernetes_host=... token_reviewer_jwt=... kubernetes_ca_cert=...
 vault auth enable jwt
 vault write auth/jwt/config oidc_discovery_url=... bound_issuer=...
+vault auth enable userpass
 vault list auth/userpass/users
 vault write auth/userpass/users/alice password=... policies=app-read
 vault login -method=userpass -field=token username=alice password=alice-pw
@@ -122,6 +132,7 @@ vault write database/config/mysql-app plugin_name=mysql-database-plugin connecti
 vault write database/roles/app-readonly db_name=mysql-app creation_statements="..." default_ttl=1h max_ttl=24h
 vault read database/creds/app-readonly
 vault write -f database/rotate-root/mysql-app
+vault write database/static-roles/legacy-report db_name=mysql-app username=report rotation_period=24h
 vault read database/static-creds/legacy-report
 vault lease lookup '<lease_id>'
 vault lease renew -increment=1h '<lease_id>'
@@ -130,6 +141,10 @@ vault lease revoke -prefix database/creds/app-readonly
 vault list sys/leases/lookup/auth/token/create
 vault write sys/leases/lookup lease_id='<lease_id>'
 ```
+
+> **注意**：静态角色名（`legacy-report`）也要出现在连接的 `allowed_roles` 里（第 6 章 6.2 有实测说明）。
+
+> **注意**：`lease` 命令适用于**动态密钥/认证方法**签发的租约；token 自己的租约要用 `vault token renew`——对 `auth/token/create/...` 走 `lease renew` 会报 `tokens cannot be renewed through this endpoint`。
 
 ### Transit
 
@@ -167,10 +182,12 @@ vault write pki/intermediate/set-signed certificate=@int.pem
 ```bash
 vault audit list
 vault audit list -detailed
-vault audit enable file file_path=/var/log/vault-audit.log
-vault audit enable -path=file2 file file_path=/var/log/vault-audit2.log
+vault audit enable file file_path=/tmp/vault-audit.log
+vault audit enable -path=file2 file file_path=/tmp/vault-audit2.log
 vault audit disable file
 ```
+
+> **注意**：`file_path` 必须是**服务端进程**可写的路径。以 root 运行的服务端才能写 `/var/log/...`，否则会报 `unable to open file for sink ...: permission denied`。
 
 ### 身份与工具
 
@@ -191,13 +208,14 @@ vault read sys/internal/ui/mounts/app/data/demo   # 查看路径解析结果
 | 局部改 | `vault kv patch -mount=app demo a=1` | `app/data/demo` | `patch` |
 | 列目录 | `vault kv list -mount=app` | `app/metadata?list=true` | `list` |
 | 看元数据 | `vault kv metadata get -mount=app demo` | `app/metadata/demo` | `read` |
-| 软删除 | `vault kv delete -mount=app demo` | `app/delete/demo` | `delete` |
-| 恢复 | `vault kv undelete -mount=app -versions=1 demo` | `app/undelete/demo` | `update` |
-| 彻底销毁 | `vault kv destroy -mount=app -versions=1 demo` | `app/destroy/demo` | `update` |
+| 软删除 | `vault kv delete -mount=app demo` | `app/data/demo`（DELETE） | `delete` |
+| 按版本软删除 | `vault kv delete -mount=app -versions=1 demo` | `app/delete/demo`（POST） | `create`、`update` |
+| 恢复 | `vault kv undelete -mount=app -versions=1 demo` | `app/undelete/demo` | `create`、`update` |
+| 彻底销毁 | `vault kv destroy -mount=app -versions=1 demo` | `app/destroy/demo` | `create`、`update` |
 | 删元数据 | `vault kv metadata delete -mount=app demo` | `app/metadata/demo` | `delete` |
-| 用路径语法读 | `vault kv get app/demo` ❌ | 先预检 `sys/internal/ui/mounts/app/demo`，再请求 `app/data/demo` | `read` on `sys/internal/ui/mounts/*` + `read` on `app/data/demo` |
+| 用路径语法读 | `vault kv get app/demo`（同样可用） | 先预检 `sys/internal/ui/mounts/app/demo`，再请求 `app/data/demo` | `read` on `app/data/demo`（预检端点对所有已认证 token 开放，不必写进策略） |
 
-**结论**：写策略时以 **API 路径** 为准；用 CLI 时**优先用 `-mount=` 形式**，它跳过预检、路径更直观。
+**结论**：写策略时以 **API 路径** 为准；用 CLI 时**本书统一用 `-mount=` 形式**（两种写法都能用，`vault kv get app/demo` 同样能读到值，`-mount=` 只是更直观、也更少踩路径歧义的坑）。注意两种写法**都会**先做一次预检（`-mount=` 预检 `sys/internal/ui/mounts/<挂载点>`，路径写法预检 `sys/internal/ui/mounts/<挂载点>/<路径>`），只是预检路径不同。能力列取自 `vault kv ... -output-policy` 的输出；`undelete`/`destroy` 只给 `update` 也能成功，写 `create`、`update` 更保险。
 
 ## D. 错误信息索引
 
@@ -206,8 +224,10 @@ vault read sys/internal/ui/mounts/app/data/demo   # 查看路径解析结果
 | `connection refused` / `no such host` | 服务不可达 | 地址、端口、网络、进程是否在跑 |
 | `Vault is sealed`（503） | 已加封 | `vault status` → 解封 |
 | `permission denied`（403） | 策略不允许 | 对照真实 API 路径与 `token capabilities` |
-| `bad token` | token 无效/已撤销/过期 | `vault token lookup` |
-| `unsupported path`（404） | 路径或引擎类型错 | `vault path-help <path>` |
+| `bad token` | token 无效/已撤销/过期 | `vault token lookup`；若拿无效 token 直接查自己，看到的其实是 `permission denied` + `invalid token` |
+| `no handler for route "..."`（404） | **没有任何挂载**匹配这个路径（`... route entry not found.`） | `vault path-help <path>` 查真实路由 |
+| `unsupported path`（404） | 挂载匹配上了，但该子路径/后端不认（例如把 `raft snapshot` 打在 `file` 存储上） | 确认引擎类型与真实 API 路径 |
+| `unsupported operation`（405） | 路径存在，但方法/子命令不对 | 换正确的 HTTP 方法 |
 | `check-and-set parameter did not match` | CAS 冲突 | 先读当前版本号 |
 | `path already in use` | 挂载/审计设备路径重复 | 换 `-path=` |
 | `must have at least one bound constraint` | 认证角色缺少绑定条件 | 加 `bound_audiences`/`bound_claims` |
@@ -237,20 +257,20 @@ vault read sys/internal/ui/mounts/app/data/demo   # 查看路径解析结果
 **第一周（对应第 1-4 章）**
 
 1. 安装 Vault 2.1.x，跑通 dev 模式；
-2. 把 KV v2 的 5 组路径（data/delete/destroy/undelete/metadata）各敲一遍；
-3. 用 `-output-policy` 反推并写出你的第一份策略。
+2. 把 KV v2 的 7 组路径（`config/` + 数据面 `data/`、`delete/`、`destroy/`、`undelete/`、`metadata/` + 只读的 `subkeys/`）各敲一遍。
 
 **第二周（对应第 5-9 章）**
 
-1. 建两个身份（人和机器），验证最小权限与越权拒绝；
-2. 用 AppRole + Agent 让一个真实小服务从 Vault 拿配置；
-3. 打开审计设备，观察一次完整请求的两条日志。
+1. 用 `-output-policy` 反推并写出你的第一份策略；
+2. 建两个身份（人和机器），验证最小权限与越权拒绝；
+3. 用 AppRole + Agent 让一个真实小服务从 Vault 拿配置。
 
 **第三周（对应第 10-13 章）**
 
 1. 用 Transit 加密一列数据，并验证"只能加密不能解密"的策略；
 2. 用 PKI 签发一张 24 小时证书，并用 Agent 自动续期；
-3. 申请一个动态数据库账号，观察它被自动 `DROP`。
+3. 用第 6 章建好的动态数据库角色，观察租约到期或撤销时账号被自动 `DROP`；
+4. 打开审计设备，观察一次完整请求的两条日志。
 
 **第四周（对应第 14-16 章）**
 

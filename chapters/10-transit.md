@@ -85,10 +85,12 @@ vault write -field=hmac transit/hmac/payments algorithm=sha2-256 input="$PT"
 ```
 
 ```text
-vault:v2:1UcZ1sbH64UW5aU9iP+mIDufEFMQFMu8OJ2fAPVf0+Y=
+vault:v1:BKQV4qLwQ+OVbo4wbzWI1pOj+6TRtGkrbmgwK6n1cq4=
 ```
 
-同样的输入、同样的密钥版本，HMAC 恒定；密钥轮换后 HMAC 会变。这个能力常用于"**加密存储 + 密文索引**"：数据库里存 HMAC 作为检索列，存密文作为数据列。
+注意前缀里的版本号：这一步还没轮换，所以是 `vault:v1:`（轮换后才会变成 `vault:v2:`，见 10.4）。同样的输入、同样的密钥版本，HMAC 恒定；密钥轮换后 HMAC 会变。这个能力常用于"**加密存储 + 密文索引**"：数据库里存 HMAC 作为检索列，存密文作为数据列。
+
+（`algorithm` 可以省略，默认就是 `sha2-256`。）
 
 ### 10.4 密钥轮换：不用重新加密历史数据
 
@@ -102,6 +104,10 @@ vault read -field=latest_version transit/keys/payments
 
 - **新数据用 v2 加密**（密文前缀变成 `vault:v2:`）；
 - **旧数据仍然是 `vault:v1:...`，依旧可以解密**（因为 Vault 保留了历史密钥版本）；
+- HMAC 的前缀也跟着变成 `vault:v2:`：
+  ```text
+  vault:v2:chuRornuLwinvoKRhNMMAhjVBH+JhmC7JAwrkIjXPj8=
+  ```
 - 想统一升级到新版本，用 `rewrap`——它**解密再加密，但明文从不离开 Vault**：
 
 ```bash
@@ -126,6 +132,8 @@ ciphertext     vault:v2:5/x1UoT9pOsUKGmVqvRAI0HcJggLX+c0V1nQWu4pHYW6hiw6Qzb7iIfJ
 key_version    2
 plaintext      ZBQFFnhHk9UFdZK78AvlabfAZ7H2ez2s6sBWzul22z0=
 ```
+
+这里的 `key_version 2` / `vault:v2:` 是因为上一节刚 `rotate` 过；**如果你没跑 10.4 的 `rotate`，这里会是 `key_version 1` / `vault:v1:`**，属正常现象（`plaintext` 解码后固定是 32 字节）。
 
 用法：
 
@@ -224,7 +232,7 @@ Code: 403. Errors:
 
 ## 踩坑与检查清单
 
-- **输入必须是 base64。** 直接把明文丢进去会报 `failed to decode input`。bash 里用 `printf '%s' '明文' | base64`。
+- **输入必须是 base64。** 直接把明文丢进 `transit/encrypt/*` 会报 `* illegal base64 data at input byte 4`（字节位置随输入而变）；`transit/hmac/*` 上则是 `* unable to decode input as base64: illegal base64 data at input byte 0`。bash 里用 `printf '%s' '明文' | base64`。
 - **别把 `rotate` 当成 `rewrap`。** `rotate` 只影响**新**数据；历史密文需要显式 `rewrap` 才会升级版本。
 - **`min_decryption_version` 是"作废旧版本"的开关**：把它调高，旧密文就再也解不开了。这是**不可逆**的，用于"确认所有历史数据都已升级"之后的收尾。
 - **`allow_plaintext_backup=true` 会让密钥可导出**，出事后影响面完全不同。除非有明确需求，保持 `false`。

@@ -55,6 +55,9 @@ disable_mlock = true
 启动、初始化、解封的流程与第 14 章完全相同：
 
 ```bash
+# raft 后端不会自动创建 path 目录（file 后端会），先建好并授权
+sudo mkdir -p /vault/data && sudo chown vault:vault /vault/data
+
 vault server -config=raft-single.hcl
 vault operator init -key-shares=3 -key-threshold=2
 vault operator unseal '<key1>'
@@ -68,9 +71,9 @@ vault operator raft list-peers
 ```
 
 ```text
-Node      Address           State       Voter
-----      -------           -----       -----
-vault-1   127.0.0.1:8201    leader      true
+Node       Address           State     Voter
+----       -------           -----     -----
+vault-1    127.0.0.1:8201    leader    true
 ```
 
 ### 15.3 三节点 HA 集群
@@ -115,16 +118,16 @@ vault operator raft join https://vault-1.internal:8200
 vault operator raft snapshot save backup-$(date +%Y%m%d-%H%M).snap
 ```
 
-```text
-Saved snapshot backup-20260923-2030.snap
-```
+实测：这条命令**成功时没有任何输出**（退出码 0），用 `ls -l *.snap` 确认文件已生成。
 
 **这条命令只能在 Raft 存储（或企业版的 DR 复制）上使用**。在 `file` 存储上执行会得到 404（实测）：
 
 ```text
 Error taking the snapshot: Error making API request.
-URL: GET http://127.0.0.1:8300/v1/sys/storage/raft/snapshot
+
+URL: GET http://127.0.0.1:8200/v1/sys/storage/raft/snapshot
 Code: 404. Errors:
+
 * 1 error occurred:
 	* unsupported path
 ```
@@ -137,7 +140,7 @@ No raft cluster configuration found
 
 （如果 Vault 处于**加封**状态，这两个命令都会先返回 `Code: 503 ... Vault is sealed`——所以看到 503 请先解封，再判断是不是存储类型的问题。）
 
-顺手可以查集群的版本历史（2.x 提供）：
+顺手可以查集群的版本历史（版本追踪 1.9.0 引入，该命令本身要求服务端 ≥ 1.10.0）：
 
 ```bash
 vault version-history
@@ -156,12 +159,14 @@ vault operator raft snapshot inspect backup-20260923-2030.snap
 ```
 
 ```text
-ID            abcd1234-...
-Size          123456
-Index         42
-Term          3
-Version       1
+ ID           bolt-snapshot
+ Size         14846
+ Index        45
+ Term         3
+ Version      1
 ```
+
+（节选：真实输出后面还有一张 `Key Name / Count / Size` 明细表，逐项列出 `sys/policy`、`core/keyring`、`core/mounts` 等条目。）
 
 备份策略建议：
 
@@ -179,15 +184,26 @@ Version       1
 vault operator raft snapshot restore backup-20260923-2030.snap
 ```
 
-```text
-Snapshot restore complete.
-```
+实测：同样**成功时没有任何输出**（退出码 0）。
 
 要点与踩坑：
 
 - **restore 会覆盖当前集群的全部状态**（包括现有 token、策略、密钥）。这是"回到过去"，不是"合并"；
-- 恢复后**旧集群的成员信息会一并回来**。跨集群恢复（例如灾备到新环境）通常需要 `force` 之类的参数与人工确认；
-- **恢复后节点仍需要解封**；
+- 恢复后**旧集群的成员信息会一并回来**。跨集群恢复（例如灾备到新环境）会先撞上 keyring 校验，需要人工确认；
+- **keyring 不同的快照不能直接恢复**：`vault operator raft snapshot restore` 会被服务端直接拒绝。实测输出：
+
+```text
+Error installing the snapshot: Error making API request.
+
+URL: POST http://127.0.0.1:8200/v1/sys/storage/raft/snapshot
+Code: 400. Errors:
+
+* could not verify hash file, possibly the snapshot is using a different set of unseal keys; use the snapshot-force API to bypass this check
+```
+
+- **CLI 没有 `-force` 这类参数**：`vault operator raft snapshot restore` 的 flag 表里没有它，`vault operator raft snapshot-force` 也不是子命令——要绕过上面的校验，只能走 API `POST /v1/sys/storage/raft/snapshot-force`，别照着敲一个不存在的 flag；
+- 实测旁证：这次失败的跨 keyring 恢复之后，目标集群**自己的 root token 也变成了 `403 invalid token`**；
+- **同一集群、同一 keyring 的快照恢复后，节点通常仍是解封状态**（实测 `Sealed false`、root token 仍可用、数据立刻可读；三节点集群同样是 `Sealed false` / `HA Mode active`）；只有 keyring 不同的快照（用上面那个 force API 强行装进去）才需要（重新）解封；
 - **restore 需要强权限**，不要给普通运维身份。
 
 ### 15.6 file 存储的备份方式
@@ -224,7 +240,7 @@ sudo systemctl start vault
 版本侧的注意点（与本教程的版本校准相关）：
 
 - **1.21 → 2.x 的升级路径**：官方要求逐大版本升级（1.20 → 1.21 → 2.0 → 2.1），不要跳版本；
-- 升级前用 `vault version-history`（2.x 新增）确认集群的版本历史；
+- 升级前用 `vault version-history`（版本追踪 1.9.0 引入，该命令本身要求服务端 ≥ 1.10.0）确认集群的版本历史；
 - 2.x 会新增默认挂载（如 `agent-registry/`）与默认策略（如 `default-ceiling`），升级后 `vault secrets list` / `vault policy list` 的变化是**正常的**，不要误删；
 - 不要依赖"跨大版本还能原样跑"——先在预发环境把本教程第 4-13 章的验证脚本跑一遍。
 
@@ -250,11 +266,16 @@ sudo systemctl start vault
 ## 踩坑与检查清单
 
 - **`file` 存储只能单机**，永远不要用它做"生产高可用"。
+- **`storage "raft"` 不会自动创建 `path` 目录**（`file` 后端会自动建），目录不存在时进程直接起不来：`Error initializing storage of type raft: failed to create fsm: failed to open bolt file: open /vault/data/vault.db: no such file or directory`——先 `mkdir -p` 并把目录 `chown` 给 vault 用户。
 - **备份必须与 unseal key 分开保存**：只备份数据目录是最常见的"以为备份了其实没备份"。
 - **快照要定期做恢复演练**（第 16 章清单里有）。
 - **Raft 集群升级后记得逐个解封**，别以为"进程起来了就是好的"。
 - **升级前必须备份**（Raft 不支持降级）。
-- **`api_addr` / `cluster_addr` 要显式配置**，否则日志会警告 `no api_addr value specified`，重定向与集群通信可能出问题。
+- **`api_addr` / `cluster_addr` 要显式配置**。只配 `cluster_addr`、漏掉 `api_addr` 时，日志会警告（实测原文，`api_addr` 一词是带反引号的）：
+  ```text
+  [WARN]  no `api_addr` value specified in config or in VAULT_API_ADDR; falling back to detection if possible, but this value should be manually set
+  ```
+  而在 **Raft 存储下这不止是警告——进程直接起不来**：`Error initializing core: missing API address, please set in configuration or via environment`（`file` 存储才是"只警告、照常启动"）。`cluster_addr` 同样不能漏，否则 Raft 直接拒绝启动：`Cluster address must be set when using raft storage`。
 - **监控**：至少监控"节点是否解封""是否 active""Raft 是否失去 quorum""审计设备是否可用"。
 
 下一章把所有"别忘的事"合并成一份可执行的上线清单。

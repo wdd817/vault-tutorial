@@ -83,15 +83,19 @@ EOT
 vault agent -log-level=info -config=./agent/config.hcl
 ```
 
-> **相对路径的两个实测坑**（都会让 Agent 直接启动失败）：
+> **路径相关的两个实测坑**：
 >
-> 1. **flag 必须在位置参数前**（Vault CLI 的通用规则），且 `-config` 建议给绝对路径：
->    `vault agent -log-level=info -config=/etc/vault-agent/config.hcl`
->    如果写成 `vault agent -config=config.hcl -log-level=info`，会报 `Command flags must be provided before positional arguments`。
-> 2. **配置里的相对路径是相对于 Agent 进程的工作目录，不是配置文件所在目录**。工作目录不对会看到：
+> 1. **`-config` 建议给绝对路径**：`vault agent -log-level=info -config=/etc/vault-agent/config.hcl`。
+>    顺便澄清一个常见误解：**`vault agent` 的 flag 顺序随便写都行**——它没有位置参数，写成 `vault agent -config=config.hcl -log-level=info` 一样能正常启动。
+>    `Command flags must be provided before positional arguments` 是 **Vault CLI 的通用规则**，只在**有位置参数**的子命令上触发，比如把 `vault kv get -mount=app demo` 写成 `vault kv get demo -mount=app`：
 >    ```text
->    error creating file sink: error during write check: error opening temp file in dir .lab/agent for writing:
->    open .lab/agent/token.tmp.51e3a71f: no such file or directory
+>    Command flags must be provided before positional arguments. The following arguments will not be parsed as flags: [-mount=app]
+>    Too many arguments (expected 1, got 2)
+>    ```
+> 2. **配置里的相对路径是相对于 Agent 进程的工作目录，不是配置文件所在目录**。目录不存在时会看到（下面这个 `nodir` 就是你配置里写的目录，临时文件名每次不同）：
+>    ```text
+>    error creating file sink: error during write check: error opening temp file in dir nodir for writing:
+>    open nodir/token.tmp.187d34c0: no such file or directory
 >    ```
 >    解决办法：在配置里用绝对路径，或者在正确的目录下启动（用 systemd 托管时工作目录默认是 `/`，更应该写绝对路径）。
 
@@ -126,11 +130,19 @@ Agent 不是一次性渲染就结束了，它做三件事：
 2. **监听密钥变化**：模板里的 secret 一旦版本更新，自动重新渲染文件；
 3. **失败重试**：Vault 短暂不可用时按退避重试，而不是让应用崩掉。
 
-验证"密钥变化自动重渲染"（Agent 还在运行时执行）：
+验证"密钥变化自动重渲染"（Agent 还在运行时执行）。**但注意：KV v2 的读响应 `lease_duration` 是 0**（实测），Agent 没有租约可以盯，只能按固定间隔轮询，默认约 5 分钟——不配这个间隔，`sleep 3` 后文件**不会**变（实测要等约 280 秒）。所以在模板上加一段 `template_config`：
+
+```hcl
+template_config {
+  static_secret_render_interval = "5s"
+}
+```
+
+改完重启 Agent，再跑：
 
 ```bash
 vault kv put -mount=app demo username=demo password=rotated-by-ops
-sleep 3
+sleep 10
 cat agent/rendered.env
 ```
 
@@ -138,6 +150,10 @@ cat agent/rendered.env
 APP_USERNAME=demo
 APP_PASSWORD=rotated-by-ops
 ```
+
+实测（`static_secret_render_interval = "5s"`）：轮换后约 4 秒文件就更新了；把间隔调成 `60s` 对照，两次 `rendered` 日志相隔 52 秒，说明这个间隔确实生效。
+
+**原理**：Agent 对"静态密钥"（KV v2 这类没有 lease 的）是按 `static_secret_render_interval` 主动轮询的，默认约 5 分钟；把它调小，轮换到文件更新的延迟就相应变短。生产上按"能接受的密钥生效延迟"取值即可，不必照抄 5s。
 
 对"轮换后要平滑生效"的服务，这比"重启才能加载新密码"安全得多。
 
@@ -183,7 +199,74 @@ vault proxy -config=proxy/config.hcl
 # 应用把 VAULT_ADDR 指向 http://127.0.0.1:8100，其余代码不变
 ```
 
-它可以在本地代答一部分读请求（降低延迟、减轻服务端压力），并统一处理认证。对"客户端不想改代码、但希望走本地代理"的场景更合适。
+> 注意：这条命令是在仓库根目录执行的；配置里的相对路径仍以**进程工作目录**为准，细节见本节末尾。
+
+`proxy/config.hcl` 与 Agent 的配置很像，但有两点必须写对：
+
+```hcl
+# proxy/config.hcl
+pid_file = "./pid"
+
+auto_auth {
+  method "approle" {
+    mount_path = "auth/approle"
+    config = {
+      role_id_file_path   = "./role-id"
+      secret_id_file_path = "./secret-id"
+    }
+  }
+
+  sink "file" {
+    config = {
+      path = "./token"
+      mode = 0640
+    }
+  }
+}
+
+vault {
+  address = "https://vault.example.internal:8200"
+}
+
+listener "tcp" {
+  address     = "127.0.0.1:8100"
+  tls_disable = true
+}
+
+# 关键：允许客户端不带 token，直接用 Agent 的 token 访问
+api_proxy {
+  use_auto_auth_token = true
+}
+```
+
+- **`use_auto_auth_token` 必须放在顶层的 `api_proxy {}` 块里**，放进 `cache {}` 块是无效的；
+- **auto_auth 必须有一个出口**：sink、`api_proxy.use_auto_auth_token = true`、或 `cache.cache_static_secrets = true` 三者至少有一个。都没有会直接启动失败：
+  ```text
+  error validating configuration: auto_auth requires at least one sink, api_proxy.use_auto_auth_token=true, or cache.cache_static_secrets=true
+  ```
+
+**别忘了 9.3 那条路径规则在这里同样生效**：配置里的相对路径是相对**进程工作目录**的。上面的 `./role-id`、`./secret-id` 要求你在 `proxy/` 目录里启动，并在那里准备好这两个文件（沿用 9.1 生成的即可）：
+
+```bash
+cp agent/role-id agent/secret-id proxy/   # 复用 9.1 生成的凭证
+cd proxy
+vault proxy -config=./config.hcl
+```
+
+如果坚持在仓库根目录执行 `vault proxy -config=proxy/config.hcl`，就要把配置里的 `./role-id`、`./secret-id` 改成 `proxy/role-id`、`proxy/secret-id`（或绝对路径），否则文件读不到，日志里会一直重试：
+
+```text
+[ERROR] proxy.auth.handler: error getting path or data from method: error="no known role ID" backoff=960ms
+```
+
+实测效果：登录成功后监听 8100，**不带任何 token** 就能读到 KV：
+
+```bash
+curl -s http://127.0.0.1:8100/v1/app/data/demo
+# {"request_id":"...","data":{"data":{"password":"s3cr3t","username":"demo"},"metadata":{...}},...}
+```
+
+`VAULT_ADDR=http://127.0.0.1:8100 vault kv get -mount=app demo` 也能正常返回，客户端侧不需要改任何代码。它可以在本地代答一部分读请求（降低延迟、减轻服务端压力），并统一处理认证。对"客户端不想改代码、但希望走本地代理"的场景更合适。
 
 ## 原理：Agent 把"最后一公里"接上了
 

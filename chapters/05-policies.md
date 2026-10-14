@@ -246,7 +246,7 @@ sudo, update
 
 #### 第 2 步：动态对照（先备好可弃的 token，再按核按钮）
 
-`revoke-prefix` 是幂等且不可逆的，所以实验设计要防着它把自己也带走：**另建一个带 `sudo` 的 token 当调用者**（别用 root，原因见下面的警告），只把三个可弃 token 当作靶子。
+`revoke-prefix` 是幂等且不可逆的，而且它的打击面比"前缀下的租约"更大：**只要是 token store（`auth/token/create`）创建的 token，包括 root、包括带 `sudo` 的调用者自己，都会一起被撤掉。** 唯一能活下来的是**通过其它认证方式登录**得到的身份（userpass、AppRole 等，见第 8 章）。所以演练前必须先备好这样一个身份；dev 模式默认只有 root 这一种身份，这条命令在 dev 里跑完就等于"环境当场失效、只能重启 Vault"。下面只把三个可弃 token 当作靶子。
 
 ```bash
 # 1. 祭品：三个只用于本次实验的 token，记录完整 token 方便事后逐条验证
@@ -255,7 +255,7 @@ V2=$(vault token create -policy=default -ttl=20m -field=token)
 V3=$(vault token create -policy=default -ttl=20m -field=token)
 sleep 2   # 给 expiration manager 一点登记租约的时间，否则下面可能列不到
 
-echo "撤销前："
+echo "撤销前："   # 注意：列出的是租约 ID，不是 token 的 accessor；格式是混的——root 那条是裸 40 位 hex，vault token create 出来的是 h + 64 位 hex
 vault list sys/leases/lookup/auth/token/create
 
 # 2. 对照 A：没有 sudo → 403
@@ -266,9 +266,9 @@ echo "exit=$?   ← 权限拒绝时 CLI 返回 2，脚本里可以用它区分'�
 VAULT_TOKEN=$SUDO vault lease revoke -prefix auth/token/create
 echo "exit=$?"
 
-# 4. 收尾断言：撤销真的落地了吗（用祭品自己的 token 去查，被撤了必然 400）
+# 4. 收尾断言：撤销真的落地了吗（用祭品自己的 token 去查，被撤了必然查不到）
 for t in $V1 $V2 $V3; do
-  VAULT_TOKEN=$t vault token lookup-self >/dev/null 2>&1 \
+  VAULT_TOKEN=$t vault token lookup >/dev/null 2>&1 \
     && echo "FAIL  ${t:0:16}… 还活着" \
     || echo "ok    ${t:0:16}… 已失效"
 done
@@ -292,17 +292,17 @@ All revocation operations queued successfully!
 
 两句提醒，都是实测踩出来的：
 
-- **返回"queued successfully"不等于"已经撤完"。** 它的语义是"排进撤销队列了"，真正的撤销由 expiration manager 执行。所以收尾要用 `vault token lookup-self`（或 `vault lease lookup`）逐条确认，别只看那句 Success。
-- **`revoke-prefix` 的成败与"前缀下有几条租约"无关。** 前缀为空时同样返回成功——权限检查在撤销逻辑**之前**，这正是我们能用它做安全对照实验的原因。
+- **返回"queued successfully"不等于"已经撤完"。** 它的语义是"排进撤销队列了"，真正的撤销由 expiration manager 执行。所以收尾要用 `vault token lookup`（不带参数即查自己，或 `vault lease lookup`）逐条确认，别只看那句 Success。
+- **`revoke-prefix` 的成败与"前缀下有几条租约"无关。** 前缀为空时同样返回成功——权限检查在撤销逻辑**之前**，这正是我们能用它做安全对照实验的原因。不过这个结论只在**调用者本身仍然有效**时成立：调用者一旦已经被撤销（对照 B 之后紧接着再执行一次同一条命令），拿到的是 `Code: 403`、`* 2 errors occurred: * permission denied * invalid token`。
 
-> ⚠️ **真实演练中的教训（触发条件很重要）**：`vault lease revoke -prefix auth/token/create` 会撤销**该前缀下的所有租约**，包括**正在发起这次调用的那个 token**——因为调用者自己也是 `auth/token/create` 下的一条租约。
+> ⚠️ **真实演练中的教训（触发条件很重要）**：`vault lease revoke -prefix auth/token/create` 会撤销**该前缀下的所有租约**，包括**正在发起这次调用的那个 token**。
 >
-> 我实测过两种情形，结果不一样：
+> 我实测过两种情形，差别不在"是不是 root"，而在**token 是从哪来的**：
 >
-> - 调用者是**普通子 token**：撤销后它自己被撤，**root token 不受影响**（root 不在该前缀下）；
-> - 调用者**就是 root**（`export VAULT_TOKEN=root`，也就是很多人在 dev 环境里的默认状态）：**root 一起被撤销**，之后所有请求都变成 `403 + invalid token`，环境当场失效，只能重启 Vault。
+> - **token store 创建的**（`vault token create`，含 root、含带 `sudo` 的调用者、含 `-orphan` 的子 token）：**全部一起被撤销**。原因就在那个列表里——**root 自己的租约同样登记在 `auth/token/create/<40 位 hex>` 下**：在一个全新 dev 实例上（当时只有 root 一个 token），`vault list sys/leases/lookup/auth/token/create` 就只列出这一条，用 `vault write sys/leases/lookup lease_id=auth/token/create/<hash>` 能看到它的 `issue_time` 与 root 的 `creation_time` 是同一时刻、`expire_time` 为 `null`。所以**无论谁来按这个按钮，root 都会一起失效**。注意列表里列的是**租约 ID**（`auth/token/create/<hash>` 形式），不是 token 的 `accessor`——root 的 accessor 不会出现在这个列表里，别拿它当"root 安全"的依据。撤销之后所有请求都变成 `403 + invalid token`，环境当场失效；
+> - **其它认证方式登录得到的**（例如 userpass / AppRole 登录）：**不受影响**。这类 token 的租约在 `auth/userpass/login/<user>` 之类的路径下，不在被撤前缀里，而且撤销后还能继续重建策略、再发新 token。
 >
-> 所以这条命令在生产上要当"核按钮"：只给极少数值班人/自动化，执行前确认精确前缀、确保另有可用身份，并配合审计（第 13 章）。另外别走岔路——`vault lease revoke <单条 lease>` 用的是**另一个路径** `sys/leases/revoke/*`，它**不需要 `sudo`**，但同样需要 `update`；两者别混在一份策略里不加区分（第 12 章 12.6 有完整对照）。
+> 所以这条命令在生产上要当"核按钮"：只给极少数值班人/自动化，执行前确认精确前缀、**确保手里另有一个非 token store 身份**，并配合审计（第 13 章）。另外别走岔路——`vault lease revoke <单条 lease>` 用的是**另一个路径** `sys/leases/revoke/*`，它**不需要 `sudo`**，但同样需要 `update`；两者别混在一份策略里不加区分（第 12 章 12.6 有完整对照）。
 
 ### 5.6 模板化策略：让一个策略适配所有团队
 
@@ -363,11 +363,8 @@ vault policy delete app-read
 > ```
 > 排查与修复：
 > 1. 看开头三个字节：`head -c 3 app-read.hcl | xxd` 打出 `efbb bf` 就是带 BOM；
-> 2. 去掉 BOM：`sed -i '1s/^\xEF\xBB\xBF//' app-read.hcl`；
-> 3. **最省事**：把内容从标准输入喂给 Vault，不落盘：
->    ```bash
->    vault policy write app-read - < app-read.hcl
->    ```
+> 2. **真正有效的修复**：去掉 BOM —— `sed -i '1s/^\xEF\xBB\xBF//' app-read.hcl`；
+> 3. ⚠️ **注意 `vault policy write app-read - < app-read.hcl` 这个"从标准输入喂"的写法并不能修 BOM**：它把同一份带 BOM 的字节原样递给 Vault，失败文案与原错误一字不差（`Code: 400. Errors: * failed to parse policy: At 1:1: illegal char`，exit=2）。它省的是"落盘"这一步，不是"去 BOM"这一步——去 BOM 还得靠上面第 2 步。
 
 把策略文件放进 Git，并在 CI 里做两件事：
 

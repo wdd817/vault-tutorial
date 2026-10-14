@@ -33,14 +33,48 @@ MIIDNzCCAh+gAwIBAgIUUMYa8XE6SZfCBRmQMI0xVZkQCfIwDQYJKoZIhvcNAQEL
 -----END CERTIFICATE-----
 expiration       2105525234
 issuer_id        8e340a0b-fcdb-df78-f5da-6412d1045770
+issuer_name      n/a
+issuing_ca       -----BEGIN CERTIFICATE-----
+MIIDNzCCAh+gAwIBAgIUUMYa8XE6SZfCBRmQMI0xVZkQCfIwDQYJKoZIhvcNAQEL
+...
+-----END CERTIFICATE-----
+key_id           74a25763-29f3-ccc3-b4a2-3f8a19371d3a
+key_name         n/a
 serial_number    50:c6:1a:f1:71:3a:49:97:c2:05:19:90:30:8d:31:55:99:10:09:f2
 ```
 
+（节选：完整返回一共 8 个字段——`certificate`、`expiration`、`issuer_id`、`issuer_name`、`issuing_ca`、`key_id`、`key_name`、`serial_number`。自签根 CA 的 `issuing_ca` 就是它自己；`issuer_name` 和 `key_name` 未设置时，CLI 都会渲染成 `n/a`——注意 JSON 里它们其实是空字符串 `""`，`n/a` 只是表格输出的显示方式。）
+
 记住三条：
 
-- `secrets tune -max-lease-ttl` 必须**大于等于**证书 TTL，否则签发时会报"超出了挂载点的 max_lease_ttl"；
-- 根 CA 的私钥由 Vault 保管（`exportable` 默认 false）；
+- 挂载点的 `max_lease_ttl` **不约束** `pki/issue/*` 签出来的叶子证书 TTL：实测把它调到 1h 之后再签 `ttl=24h`，照样全额签发，既没有错误也没有警告。它对**根/中间 CA 的生成**才生效，而且是**静默截断**——1h 的挂载点上写 `root/generate/internal ttl=87600h` 会成功返回，但签出来的 CA 证书只有 1h 有效期；
+- 根 CA 的私钥只存在 Vault 内、不会回传（`root/generate/internal` 的返回体里没有 `private_key`）——它不是靠 `exportable` 参数控制的，这个参数在这个端点上根本不存在，传了会被忽略并警告 `* Endpoint ignored these unrecognized parameters: [exportable]`；要把私钥拿出来必须显式改用 `pki/root/generate/exported`；
 - 生产上更常见的做法是**根 CA 离线**，Vault 里只放中间 CA（见 11.6）。
+
+叶子证书真正受两道闸门约束，两道都不在挂载点上：
+
+- **角色的 `max_ttl`**——超出**不报错**，只封顶并给警告；同一条警告会**打印两遍**（实测：stderr 上两条，`-format=json` 的 `.warnings` 数组里也是长度 2 的两条相同内容）：
+
+  ```text
+  WARNING! The following warnings were returned from Vault:
+
+    * TTL "800h0m0s" is longer than permitted maxTTL "720h0m0s", so maxTTL is
+    being used
+
+    * TTL "800h0m0s" is longer than permitted maxTTL "720h0m0s", so maxTTL is
+    being used
+  ```
+
+- **CA 证书自身的到期时间**——这是唯一的硬报错（实测）：
+
+  ```text
+  Error writing data to pki/issue/web-server: Error making API request.
+
+  URL: PUT http://127.0.0.1:8200/v1/pki/issue/web-server
+  Code: 400. Errors:
+
+  * cannot satisfy request, as TTL would result in notAfter of 2026-10-15T08:34:04.843412792Z that is beyond the expiration of the CA certificate at 2026-10-14T09:34:04Z
+  ```
 
 ### 11.2 定义签发角色
 
@@ -56,8 +90,19 @@ vault write pki/roles/web-server \
 ```
 
 ```text
-Success! Data written to: pki/roles/web-server
+Key                                   Value
+---                                   -----
+allow_any_name                        false
+allow_bare_domains                    false
+allow_glob_domains                    false
+allow_ip_sans                         true
+...
+use_csr_common_name                   true
+use_csr_sans                          true
+use_pss                               false
 ```
+
+（节选：`vault write pki/roles/web-server` 的回显就是这个端点的返回体，等同于 `vault read pki/roles/web-server` 的完整字段表，一共 50 行——不是 `Success! Data written to: ...`。想少看点输出可以把 `-field` 放在位置参数**之前**，例如 `vault write -field=allowed_domains pki/roles/web-server ...`，或者写完再单独 `vault read`。）
 
 关键字段（`vault read pki/roles/web-server` 实测）：
 
@@ -105,7 +150,7 @@ vault write pki/revoke serial_number="$SERIAL"
 ```text
 Key                        Value
 ---                        -----
-revocation_time            1790165235
+revocation_time            1790165828
 revocation_time_rfc3339    2026-09-23T12:17:08.3159029Z
 state                      revoked
 ```
@@ -130,9 +175,11 @@ vault write pki/config/urls \
 > 不配这个会收到警告（实测）：
 > ```text
 > WARNING! The following warnings were returned from Vault:
-> * This mount hasn't configured any authority information access (AIA) fields;
->   this may make it harder for systems to find missing certificates in the chain
->   or to validate revocation status of certificates.
+>
+>   * This mount hasn't configured any authority information access (AIA)
+>   fields; this may make it harder for systems to find missing certificates
+>   in the chain or to validate revocation status of certificates. Consider
+>   updating /config/urls or the newly generated issuer with this information.
 > ```
 
 ### 11.5 域名越权会被拦下
@@ -143,6 +190,8 @@ vault write pki/issue/web-server common_name="evil.example.com" ttl=24h
 
 ```text
 Error writing data to pki/issue/web-server: Error making API request.
+
+URL: PUT http://127.0.0.1:8200/v1/pki/issue/web-server
 Code: 400. Errors:
 
 * common name evil.example.com not allowed by this role
@@ -152,17 +201,74 @@ Code: 400. Errors:
 
 ### 11.6 生产架构：根 CA 离线 + 中间 CA
 
-不要用根 CA 直接签叶子证书。推荐做法：
+不要用根 CA 直接签叶子证书。推荐做法（下面用 `pki_int/` 作为中间 CA 的挂载点——**不要**把中间 CA 塞回 11.1 那个根 CA 的 `pki/`；11.7、11.8 里的 `pki/issue/web-server` 请按你实际的挂载点替换）：
 
 ```text
 ① 离线机器上生成根 CA（或用企业 PKI / HSM）
-② 在 Vault 里生成 CSR：
-     vault write -field=csr pki/intermediate/generate/internal common_name="example.internal Intermediate CA" > int.csr
+② 在 Vault 里另开一个挂载点，生成 CSR：
+     vault secrets enable -path=pki_int pki
+     vault secrets tune -max-lease-ttl=43800h pki_int
+     vault write -field=csr pki_int/intermediate/generate/internal common_name="example.internal Intermediate CA" > int.csr
 ③ 用根 CA 签这个 CSR（离线操作），得到 intermediate CA 证书
 ④ 把证书导入 Vault：
-     vault write pki/intermediate/set-signed certificate=@int.pem
+     vault write pki_int/intermediate/set-signed certificate=@int.pem
 ⑤ 之后所有签发都由中间 CA 完成；根 CA 私钥永远不联网
 ```
+
+导入完用两条命令确认"确实换成中间 CA 在签"：
+
+```bash
+vault read pki_int/issuer/default          # 这里应该是中间 CA，不是根 CA
+
+vault write -format=json pki_int/issue/web-server common_name="svc.example.internal" ttl=24h \
+  | jq -r '.data.certificate' | openssl x509 -noout -issuer
+# issuer=CN = example.internal Intermediate CA
+```
+
+> ⚠️ **实测踩坑一：别在原挂载点上混着做。** 如果 `pki/` 已经按 11.1 生成了根 CA，再对它执行 `intermediate/generate` + `intermediate/set-signed`，两个 issuer 会同住一个挂载点，而 `default` **仍然是根**——签出来的证书 issuer 还是根 CA，⑤ 并没有成立（实测）：
+>
+> ```text
+> $ vault list pki/issuers
+> a29ff54c-bed6-0cdc-7018-edae9c28ac03      ← 刚导入的中间 CA
+> fe871275-c9e8-67e8-16da-63d0e609adfe      ← 11.1 生成的那个根 CA
+> $ vault read -format=json pki/issuer/default | jq -r '.data.issuer_id'
+> fe871275-c9e8-67e8-16da-63d0e609adfe
+> $ vault write -format=json pki/issue/web-server common_name=mix.example.internal ttl=24h \
+>     | jq -r '.data.certificate' | openssl x509 -noout -issuer
+> issuer=CN = example.internal Root CA
+> ```
+>
+> 要在同一个挂载点上真的切过去，必须再补一条。**别想靠 `issuer_name` 分辨这两个 issuer**——`intermediate/generate/internal` 的 `common_name` 只写进 CSR，两个 issuer 的 `issuer_name` 实测都是空的，得看证书主体来认（实测）：
+>
+> ```bash
+> for id in $(vault list -format=json pki/issuers | jq -r '.[]'); do
+>   printf '%s  ' "$id"
+>   vault read -field=certificate pki/issuer/$id | openssl x509 -noout -subject
+> done
+> # a29ff54c-bed6-0cdc-7018-edae9c28ac03  subject=CN = example.internal Intermediate CA
+> # fe871275-c9e8-67e8-16da-63d0e609adfe  subject=CN = example.internal Root CA
+>
+> vault write pki/config/issuers default=a29ff54c-bed6-0cdc-7018-edae9c28ac03
+> ```
+>
+> 然后再按上面两条命令复验：`vault read pki/issuer/default` 应该是中间 CA，签出来的证书 issuer 应该是 `CN = example.internal Intermediate CA`。
+
+> ⚠️ **实测踩坑二：中间 CA 是「外部/离线 CA」签的时候，`set-signed` 之后别立刻签发。** 叶子证书默认带 `not_before_duration=30s`（notBefore 往前回填 30 秒），于是 Vault 要求「叶子的 notBefore ≥ 签名者（中间 CA）的 notBefore」，等价于**签发时刻要比中间 CA 的签署时刻至少晚 `not_before_duration`**。只有中间 CA 的 notBefore 恰好等于"签署那一刻"（外部/离线 CA 的常见行为）时才会撞上（实测）：
+>
+> ```text
+> Error writing data to pki_int/issue/introle: Error making API request.
+>
+> URL: PUT http://127.0.0.1:8200/v1/pki_int/issue/introle
+> Code: 400. Errors:
+>
+> * notBefore before signer's notBefore
+> ```
+>
+> **用 Vault 自己的根 CA 签 CSR（`pki/root/sign-intermediate`）不会踩到这条**：Vault 给中间证书的 notBefore 同样回填 30 秒（等于"签署时刻 − 30s"），所以 `set-signed` 完立刻签发也照样成功（实测连续 3 次 `rc=0`，中间证书 `notBefore=09:13:26`、签署时刻 `09:13:56`）。
+>
+> 判据是**距"签署中间 CA"那一刻是否满 `not_before_duration`**，跟你什么时候 `set-signed` 无关：实测在同一个刚 `set-signed` 的挂载点上，把角色改成 `not_before_duration=60` 立刻签发报同一个错误，距签署 40 秒时仍然失败，70 秒后才成功。
+>
+> 补救办法二选一：**等够 `not_before_duration`（默认 30 秒）再签**，或者把角色的 `not_before_duration=0` 关掉这个回填。
 
 这样即使 Vault 被攻破，攻击者也只能用中间 CA 签证书，而**根 CA 可以在不重建整个信任链的前提下吊销它**。
 
@@ -207,10 +313,13 @@ Agent 会在证书接近过期时**自动重新签发并重写文件**，配合 
 
 > **权限提醒（实测踩坑）**：渲染 `pkiCert` 的那个身份必须拥有 `pki/issue/web-server` 的 `update` 权限。如果它只有第 5 章的 `app-read`，Agent 会一直报：
 > ```text
-> [WARN] agent: (view) vault.pki(pki/issue/web-server->...): Error making API request.
+> [WARN]  agent: (view) vault.pki(pki/issue/web-server->...): Error making API request.
+>
 > URL: PUT http://127.0.0.1:8200/v1/pki/issue/web-server
 > Code: 403. Errors:
-> * permission denied
+>
+> * 1 error occurred:
+> 	* permission denied
 > ```
 > 正确做法是给这个角色同时挂上"读配置"和"签发证书"两个策略，例如：
 > ```bash
@@ -242,7 +351,7 @@ Agent 会在证书接近过期时**自动重新签发并重写文件**，配合 
 
 ## 踩坑与检查清单
 
-- **`secrets tune -max-lease-ttl` 忘了调**，签发长有效期证书会失败。
+- **`secrets tune -max-lease-ttl` 忘了调**：它**静默截断根/中间 CA 证书**的有效期（1h 的挂载点上生成的"10 年"根 CA 实际只有 1h），但**不影响** `pki/issue/*` 的叶子 TTL——叶子签发不会因为这个参数报错，只受角色 `max_ttl`（超出封顶 + WARNING）和 CA 证书到期时间（唯一硬报错）约束。
 - **`allowed_domains` 必须写**，否则等于开放了一个任意域名 CA。
 - **`allow_bare_domains` / `allow_subdomains` 的默认值**要确认清楚：只写 `allowed_domains` 时，裸域默认是**不允许**的。
 - **CRL 路径是 `pki/cert/crl`**，不是 `pki/crl/pem`。

@@ -25,10 +25,10 @@ Key                 Value
 ---                 -----
 accessor            SEFeK167s3XRQuS5BTB6NgUp
 creation_time       1790165111
-creation_ttl        1h
-display_name        svc-api
+creation_ttl        30m
+display_name        token-svc-api
 entity_id           n/a
-expire_time         2026-09-23T21:05:11.9447149+08:00
+expire_time         2026-09-23T20:35:11.9447149+08:00
 explicit_max_ttl    0s
 id                  hvs.CAESIGqsQero...
 issue_time          2026-09-23T20:05:11.9447149+08:00
@@ -38,7 +38,7 @@ orphan              false
 path                auth/token/create
 policies            [app-read default]
 renewable           true
-ttl                 59m59s
+ttl                 29m59s
 type                service
 ```
 
@@ -126,23 +126,64 @@ vault token renew "$PER"       # 再续还是 24h —— 只要按期续期，�
 
 ### 7.4 父子关系与级联撤销（重点）
 
-用当前 token 创建的 token 是它的**子 token**，形成一棵树：
+用当前 token 创建的 token 是它的**子 token**，形成一棵树。
+
+要建子 token，光有 `auth/token/create` 的 `update` 还不够：**子 token 的策略必须是父 token 自身策略的子集**，除非父 token 在这条路径上带 `sudo`。所以下面先准备一份"能建子 token"的策略——它显式带上 `sudo` 和子 token 要用到的 `app-read`：
 
 ```bash
-# 用 root 建父 token
-PARENT=$(vault token create -policy=app-read -ttl=30m -display-name=parent -field=token)
+cat > token-admin.hcl <<'EOF'
+path "auth/token/create" {
+  capabilities = ["update", "sudo"]
+}
+
+path "app/data/demo" {
+  capabilities = ["read"]
+}
+
+path "app/metadata/demo" {
+  capabilities = ["read", "list"]
+}
+EOF
+vault policy write token-admin token-admin.hcl
+
+# 用 root 建父 token（父身份换成 token-admin）
+PARENT=$(vault token create -policy=token-admin -policy=default -ttl=30m -display-name=parent -field=token)
 # 用父 token 建子 token
 export VAULT_TOKEN=$PARENT
 CHILD_TOKEN=$(vault token create -policy=app-read -ttl=15m -display-name=child -field=token)
+
+# 子 token 是可用的：查得到、也读得到 app/data/demo
+export VAULT_TOKEN=root
+vault token lookup "$CHILD_TOKEN"
 ```
 
-> **注意**：父 token 必须有 `auth/token/create` 的权限（`update`）。只带 `app-read` 的 token 去建子 token 会得到 403：
+```text
+Key                 Value
+---                 -----
+accessor            8fLQ2xNvT4mRbZ0kPq7YdW1s
+creation_ttl        15m
+display_name        token-child
+path                auth/token/create
+policies            [app-read default]
+renewable           true
+ttl                 14m59s
+type                service
+```
+
+（节选：完整输出还有 `creation_time`、`entity_id`、`expire_time`、`explicit_max_ttl`、`id`、`issue_time`、`meta`、`num_uses`、`orphan`。）
+
+> **反例（很常见）**：父 token 只带 `app-read` 就去建子 token，会直接 403——它连 `auth/token/create` 都没有：
 > ```text
 > Error creating token: Error making API request.
+>
 > URL: POST http://127.0.0.1:8200/v1/auth/token/create
 > Code: 403. Errors:
-> * permission denied
+>
+> * 1 error occurred:
+> 	* permission denied
 > ```
+>
+> 更细一层：即使父 token 有了 `update`，只要子 token 的策略不是父策略的子集，服务端仍会拒绝并回 `Code: 400`、`child policies must be subset of parent`；想要"父能给任意策略"就必须像上面那样加 `sudo`。
 
 撤销父 token 会**连同所有子 token 一起失效**：
 
@@ -164,6 +205,10 @@ Code: 403. Errors:
 如果只想撤销父而保留子（较少用，例如"换发父 token 但不影响在跑的子任务"）：
 
 ```bash
+# 再备一对父子，专门演示 -mode=orphan
+P2=$(vault token create -policy=token-admin -policy=default -ttl=30m -display-name=p2 -field=token)
+C2=$(VAULT_TOKEN=$P2 vault token create -policy=app-read -ttl=15m -display-name=c2 -field=token)
+
 vault token revoke -mode=orphan "$P2"
 vault token lookup "$C2"        # 仍然可用
 vault token revoke "$C2"        # 记得手动收回
@@ -185,6 +230,8 @@ vault list auth/token/accessors         # 列出所有 accessor（需要权限�
 
 ### 7.6 一次性 token：`-use-limit`
 
+`-use-limit=N` 是**按请求次数**计的：每次 `vault kv get`（无论 `-mount=` 写法还是位置参数 `app/demo` 写法）**恰好消耗 1 次**。挂载预检不会额外计数，也不需要你在策略里额外授权 `sys/internal/ui/mounts/...`——那份路径的 capabilities 查询可以一直显示 `deny`，命令照样读得到：
+
 ```bash
 ONE=$(vault token create -policy=app-read -ttl=10m -use-limit=1 -display-name=one-shot -field=token)
 export VAULT_TOKEN=$ONE
@@ -194,6 +241,19 @@ vault kv get -mount=app demo    # 第二次：失败
 
 ```text
 second use exit=2 (2 = token 已耗尽)
+```
+
+额度用完之后，下一次请求直接被拒，退出码是 2：
+
+```text
+Error making API request.
+
+URL: GET http://127.0.0.1:8200/v1/sys/internal/ui/mounts/app
+Code: 403. Errors:
+
+* 2 errors occurred:
+	* permission denied
+	* invalid token
 ```
 
 `-use-limit=1` 常用于"分发一次就作废"的引导场景，配合 response wrapping（第 9 章）效果更好。

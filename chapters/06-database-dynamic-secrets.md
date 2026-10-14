@@ -24,8 +24,9 @@ services:
       MYSQL_DATABASE: orders
     ports:
       - "3306:3306"
-    command: ["--default-authentication-plugin=caching_sha2_password"]
 ```
+
+> MySQL 8.4 里 `caching_sha2_password` 已经是默认认证插件，而旧的 `--default-authentication-plugin` 选项在 8.4 已被移除（带上它 mysqld 会以 `unknown variable` 直接退出），所以这里不需要任何额外的启动参数。
 
 ```bash
 docker compose up -d
@@ -41,8 +42,8 @@ vault secrets enable database
 
 vault write database/config/mysql-app \
   plugin_name=mysql-database-plugin \
-  connection_url="root:rootpw@tcp(127.0.0.1:3306)/" \
-  allowed_roles="app-readonly" \
+  connection_url="{{username}}:{{password}}@tcp(127.0.0.1:3306)/" \
+  allowed_roles="app-readonly,legacy-report" \
   username=root \
   password=rootpw
 ```
@@ -56,13 +57,14 @@ Success! Data written to: database/config/mysql-app
 | 参数 | 含义 |
 | --- | --- |
 | `plugin_name` | 数据库类型插件：`mysql-database-plugin`、`postgresql-database-plugin`、`mssql-database-plugin`… |
-| `connection_url` | 带管理员凭据的连接串（不同插件格式不同） |
-| `allowed_roles` | 白名单：只有列在这里的角色才能使用这条连接（**别省略**） |
+| `connection_url` | 带管理员凭据的连接串，管理员账号密码用 `{{username}}` / `{{password}}` 占位（不同插件格式不同） |
+| `allowed_roles` | 白名单：只有列在这里的角色才能使用这条连接（**别省略**；动态角色和静态角色都算） |
 | `username` / `password` | 管理员账号，Vault 用它去建/删普通账号 |
 
 > **实测会遇到的真实报错**：如果后端连不上，`vault write database/config/...` 会**直接失败**，因为 Vault 会立刻验证连接：
 > ```text
 > Code: 400. Errors:
+>
 > * error creating database object: error verifying - ping: dial tcp 127.0.0.1:3306: connect: connection refused
 > ```
 > 这是好事：配置阶段就把"连不上"暴露出来，而不是等到应用启动才发现。
@@ -120,12 +122,12 @@ lease_id           database/creds/app-readonly/AbC123...
 lease_duration     1h
 lease_renewable    true
 password           A1a-xxxxxxxxxxxxxxxx
-username           v-token-app-readonly-XyZ9...
+username           v-token-app-readon-XyZ9...
 ```
 
 这三行是关键：
 
-- `username` / `password` 是**刚刚在 MySQL 里创建出来的真实账号**；
+- `username` / `password` 是**刚刚在 MySQL 里创建出来的真实账号**；MySQL 用户名上限 32 字符，Vault 会把角色名截断（`app-readonly` 被截成 `app-readon`），别拿完整的角色名去匹配；
 - `lease_duration` 是它的生存期；
 - `lease_id` 是它的"租约编号"，后续续期/撤销都靠它（第 12 章）。
 
@@ -152,6 +154,21 @@ vault write database/static-roles/legacy-report \
   rotation_period=24h
 ```
 
+```text
+Success! Data written to: database/static-roles/legacy-report
+```
+
+> **实测坑点**：`allowed_roles` 不只管动态角色，**静态角色名也必须出现在里面**。如果你在 6.2 里只写了 `allowed_roles="app-readonly"`，上面这条命令会**直接失败**：
+> ```text
+> Code: 500. Errors:
+>
+> * 1 error occurred:
+> 	* "legacy-report" is not an allowed role
+> ```
+> 补上就好：`allowed_roles="app-readonly,legacy-report"`。
+
+> **实测提示**：创建 static role 会**立刻轮换一次**密码（`last_vault_rotation` 就是创建时刻），`report_user` 原来的密码马上失效，别再用旧密码连库。
+
 ```bash
 vault read database/static-roles/legacy-report
 vault read database/static-creds/legacy-report    # 每次读取都返回当前密码
@@ -159,8 +176,13 @@ vault write -f database/rotate-role/legacy-report # 手动触发轮换
 ```
 
 > **实测提示**：`static-role` 依赖已存在的连接配置。如果 `database/config/mysql-app` 没写成功，会看到：
-> `Code: 500. Errors: * failed to find entry for connection with name: "mysql-app"`
-> —— 先解决连接配置，再创建角色。
+> ```text
+> Code: 500. Errors:
+>
+> * 1 error occurred:
+> 	* failed to find entry for connection with name: "mysql-app"
+> ```
+> —— 先解决连接配置，再创建角色。按本章顺序照抄时这里更常见的失败其实是上面的 `allowed_roles`，"连接缺失"一般是手滑删了配置才会撞到。
 
 ### 6.6 给应用一份最小策略
 
@@ -198,7 +220,38 @@ vault write database/config/pg-app \
 vault write -f database/rotate-root/mysql-app
 ```
 
-执行后，**原来的 root 密码在 Vault 之外就失效了**（Vault 把新密码只存在自己的存储里）。这是把"最敏感的那把钥匙"也交给 Vault 管理的标准做法。请在测试环境先演练，并确认自己有别的途径恢复（第 15 章的备份）。
+这一步有两个前提，不知道的话大概率会失败。
+
+**第一，连接串要用占位符写法。** 6.2 里写的是 `{{username}}:{{password}}@tcp(127.0.0.1:3306)/`，Vault 会把 `username` / `password` 两个参数填进去，轮换完再**自动更新**它们。如果你图省事写成字面量 `root:rootpw@tcp(127.0.0.1:3306)/`，Vault 不认识串里的密码，轮换后还拿旧的去连库。
+
+注意 **`rotate-root` 这一步本身会打印 `Success!`**——它只负责改密码，不管这条连接以后还能不能用。坑在后面：从此这条连接就废了，再 `vault read database/creds/<角色>` 会拿到 `Code: 500` 加 `Error 1045 (28000): Access denied for user 'vaultadmin'@'localhost'`（这条 500 的包装在不同环境下不完全一致，有时带 `* error verifying - ping:` 前缀，有时直接就是 `* Error 1045 ...`，不用纠结它的措辞）。
+
+下面这条则是稳定复现的：**重写 config 时**——比如把那份字面量配置照原样再写一遍——直接失败，`error verifying - ping:` 一样在，但 Code 变成了 400：
+
+```text
+Code: 400. Errors:
+
+* error creating database object: error verifying - ping: Error 1045 (28000): Access denied for user 'vaultadmin'@'localhost' (using password: YES)
+```
+
+顺带一句：字面量写法的那份 config，`vault read database/config/<名字>` 会把明文密码原样回显（本章 `mysql-app` 用的是占位符写法，读出来只有 `{{username}}:{{password}}`，没有密码字段）。
+
+**第二，管理员账号必须以 `'user'@'%'` 的形式存在。** mysql 插件执行的是 `ALTER USER '<连接配置里的 username>'@'%'`，它不会去解析 `user@host`。用包管理器装在 Linux 上的 MySQL 通常只有 `root@localhost`，于是你会看到：
+
+```text
+Code: 500. Errors:
+
+* 1 error occurred:
+	* failed to update user: failed to change password: Error 1396 (HY000): Operation ALTER USER failed for 'root'@'%'
+```
+
+执行成功后，**Vault 所用那个 `'user'@'%'` 账号的原密码在 Vault 之外就失效了**（Vault 把新密码只存在自己的存储里）。但要注意它**只改 `'%'` 这一条**，所以"旧密码还能不能用"取决于你的客户端**命中哪条记录**，而这与 MySQL 的 `skip_name_resolve` 有关（以下三条都在本章的 docker-compose 环境里实测过）：
+
+- **本章 docker-compose 用的官方 mysql 镜像 `skip_name_resolve=1`**：从 TCP 连 `127.0.0.1` **不会**被解析成 `localhost`，于是命中 `root@'%'` —— `mysql -h127.0.0.1 -uroot -prootpw` 实测**直接被拒**（1045）；
+- 走容器内的**本地 socket**（`docker compose exec mysql mysql -uroot -prootpw`）命中的是没被动过的 `root@localhost`，旧密码**仍然可用**——"明明改了密码却好像还能连"的错觉多半来自这里；
+- 用包管理器装在 Linux 上的 MySQL 通常会把 `127.0.0.1` 解析成 `localhost`，那种环境 TCP 也会命中 `root@localhost`，旧密码同样还能用。
+
+所以生产上更稳的做法是给 Vault 一个**专职管理员账号**（比如 `vaultadmin`，只以 `'%'` 形式存在），而不是直接用 `root`。这是把"最敏感的那把钥匙"也交给 Vault 管理的标准做法。请在测试环境先演练，并确认自己有别的途径恢复（第 15 章的备份）。
 
 ## 原理：动态密钥把"密钥"变成了"会话"
 
@@ -236,7 +289,7 @@ vault write -f database/rotate-root/mysql-app
 
 ## 踩坑与检查清单
 
-- **`allowed_roles` 别漏。** 它限制"哪些角色能用这条连接"，漏配会让任何有权限的人都能借这条连接去建高权账号。
+- **`allowed_roles` 别漏，也别只写动态角色。** 它限制"哪些角色能用这条连接"，漏配会让任何有权限的人都能借这条连接去建高权账号。注意它**同时约束动态角色和静态角色**，`static-roles` 里用到的角色名也必须列进去。
 - **管理员账号权限要刚好够用。** 建号/删号 + 授权即可，不要给它 `SUPER` 之类。
 - **`default_ttl` 别设太长。** 动态密钥的全部价值就在"短"。业务侧必须能接受"启动时取一次凭据、到期前重新取"。
 - **应用要处理"凭据到期"。** 动态密钥会消失，应用必须支持重新申请（第 9 章的 Vault Agent 可以帮你自动完成）。

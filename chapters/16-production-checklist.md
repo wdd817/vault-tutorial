@@ -104,13 +104,13 @@
 | `Code: 403 permission denied` | 策略路径与实际 API 路径不一致 | 看报错里的 URL；用 `vault token capabilities` 对照 |
 | `Code: 404 unsupported path` | 路径/引擎类型写错（例如 raft 命令用在 file 存储） | 用 `vault path-help <path>` 查真实路由 |
 | KV v2 `kv get` 无数据但退出码 0 | 该版本被**软删除** | 看 metadata 的 `deletion_time`；必要时 `kv undelete` |
-| `Error: check-and-set parameter did not match` | 挂载设置了 `cas_required`，写入没带正确版本 | 先 `kv metadata get` 看 `current_version` |
+| `Code: 400 ... * check-and-set parameter did not match the current version`（首次写入、`cas_required=true` 且不带 `-cas` 时是 `* check-and-set parameter required for this call`） | 挂载设置了 `cas_required`，写入没带正确版本 | 先 `kv metadata get` 看 `current_version` |
 | `Command flags must be provided before positional arguments` | Vault CLI 要求 flag 写在位置参数之前 | 把 `-field=`、`-mount=` 等提前 |
 | Agent 报 `error creating file sink` / 找不到文件 | 相对路径基于**进程工作目录**而非配置文件目录 | 全部改绝对路径 |
 | `database/config` 写入失败 | 后端连不上（Vault 会立即验证连接） | 先确认数据库可达与凭据正确 |
 | `secret-id/accessor/.../destroy` 返回 404 | AppRole 正确路径是 `secret-id-accessor/destroy` | 参照第 8 章 |
 | 用假 JWT 登录报 `malformed jwt` / 缺 bound 约束 | 角色没配 `bound_audiences` 等绑定条件 | 至少加一个绑定条件 |
-| 全部请求突然 403 且 token 无效 | `-prefix` 撤销误伤了自己的父 token | 用另一个身份登录并审计 `sys/leases/revoke-prefix` |
+| 全部请求突然 403 且 token 无效 | `vault lease revoke -prefix` 撤销的范围误伤了自己的父 token（`vault token revoke` **没有** `-prefix`，写了会报 `flag provided but not defined: -prefix`） | 用另一个身份登录并审计 `sys/leases/revoke-prefix/<prefix>` |
 | 重启后数据"消失" | 用了 dev 模式（inmem） | 换非 dev + Raft/file 持久化存储 |
 | `raft snapshot save` 报 404 | 存储不是 Raft | 确认存储类型，或改用文件级备份 |
 
@@ -139,7 +139,10 @@ export VAULT_ADDR=https://vault.example.internal:8200
 vault status >/dev/null || { echo 'vault unavailable or sealed' >&2; exit 1; }
 
 # 2. 关键路径可读（用受限身份，不用 root）
-vault kv get -mount=app demo >/dev/null || { echo 'app/data/demo unreadable' >&2; exit 1; }
+#    注意：版本被软删除时 kv get 的退出码仍是 0（见"常见坑速查"），只判退出码检测不出来，
+#    所以这里断言真的取到了数据
+vault kv get -format=json -mount=app demo | jq -e '.data.data' >/dev/null \
+  || { echo 'app/data/demo unreadable' >&2; exit 1; }
 
 # 3. 越权必须被拒
 if vault kv get -mount=app db/prod >/dev/null 2>&1; then
@@ -149,9 +152,12 @@ fi
 # 4. 动态凭据能申请
 vault read database/creds/app-readonly >/dev/null || { echo 'dynamic creds failed' >&2; exit 1; }
 
-# 5. 审计设备仍然启用（注意：没有设备时返回的是 {} 且退出码为 0）
-[ "$(vault audit list -format=json | jq 'length')" -ne 0 ] \
-  || { echo 'no audit device enabled' >&2; exit 1; }
+# 5. 审计设备仍然启用
+#    注意两点：没有设备时返回的是 {} 且退出码为 0；另外 sys/audit 是 sudo 保护的路径，
+#    这一步的身份必须带 sudo（或直接用 root），否则会 403 permission denied
+AUDIT_N=$(vault audit list -format=json | jq 'length' 2>/dev/null || echo 0)
+[ -n "$AUDIT_N" ] || AUDIT_N=0
+[ "$AUDIT_N" -ne 0 ] || { echo 'no audit device enabled' >&2; exit 1; }
 
 # 6. Agent 渲染出的密钥文件是最新的
 #    （在你的部署里替换为实际检查）

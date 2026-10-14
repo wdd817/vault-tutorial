@@ -58,7 +58,9 @@ creation_ttl        768h
 display_name        userpass-alice
 entity_id           b09d924d-...
 expire_time         2026-10-25T20:05:25.7154581+08:00
+explicit_max_ttl    0s
 id                  hvs.CAESIHh8...
+issue_time          2026-09-23T20:05:25.7154581+08:00
 meta                map[username:alice]
 num_uses            0
 orphan              true
@@ -68,6 +70,8 @@ renewable           true
 ttl                 767h59m59s
 type                service
 ```
+
+> **注意**：上面的回显是 alice 用密码登录后的样子（alice 在第 5 章才创建）。用本章的 dev 模式 root token 执行时，会看到 `display_name token`、`policies [root]`、`path auth/token/create`、`creation_ttl 0s`、`ttl 0s`，字段本身完全一样。
 
 这四行是本教程后面反复要用到的定位信息：
 
@@ -80,7 +84,7 @@ type                service
 
 ```bash
 vault token capabilities secret/data/hello
-# read
+# root（本章用的是 dev 模式的 root token；换成受限 token 才会输出 read）
 ```
 
 还可以替**别人**问（需要 root 或相应的 `sys/capabilities` 权限），这在排查"某个服务的 token 为什么读不到"时极其好用：
@@ -89,7 +93,7 @@ vault token capabilities secret/data/hello
 vault token capabilities hvs.CAESIHh8... secret/data/hello
 ```
 
-返回的是最小能力集合，可能的值：`deny`、`create`、`read`、`update`、`patch`、`delete`、`list`、`sudo`。
+返回的是最小能力集合，可能的值：`deny`、`create`、`read`、`update`、`patch`、`delete`、`list`、`sudo`（root token 会直接返回 `root`）。
 
 ### 3.4 第一次读写：看清楚"路径"是什么
 
@@ -109,11 +113,11 @@ vault read secret/data/hello
 ```text
 Key         Value
 ---         -----
-data        map[env:dev message:hello vault]
-metadata    map[created_time:... deletion_time: destroyed:false version:1]
+data        <nil>
+metadata    map[created_time:... custom_metadata:<nil> deletion_time:... destroyed:false version:2]
 ```
 
-理解这条对应关系，后面写策略时就不会写出"看起来对但永远 403"的规则。
+`data` 是 `<nil>`，因为 3.4 开头那条 `vault kv delete` 已经把这一版标记为**软删除**（`deletion_time` 有值，metadata 仍在；这里是 `version:2`，因为第 2 章 2.4 已经写过一次 `secret/hello`）；这也说明这条 `vault read` 和 `vault kv get -mount=secret hello` 读的是同一个 `secret/data/hello`——理解这条对应关系，后面写策略时就不会写出"看起来对但永远 403"的规则。
 
 ### 3.5 看看 Vault 里到底挂了哪些"柜子"
 
@@ -201,6 +205,11 @@ and the backend never has an opportunity to see the unencrypted value. ...
 
 ## PATHS
 
+The following paths are supported by this backend. To view help for
+any of the paths below, use the help command with any route matching
+the path pattern. Note that depending on the policy of your auth token,
+you may or may not be able to access certain paths.
+
     ^config$
         Configures settings for the KV store
 
@@ -218,9 +227,12 @@ and the backend never has an opportunity to see the unencrypted value. ...
 
     ^undelete/.*$
         Undeletes one or more versions from the KV store.
+
+    ^subkeys/.*$
+        Read the subkeys within the data from the KV store without their associated values
 ```
 
-注意 `PATHS` 这一段：KV v2 对外暴露了 5 组路径（`data/`、`delete/`、`destroy/`、`undelete/`、`metadata/`），这正是第 4 章要逐条讲的"版本与删除语义"。而 `vault kv get` 只是帮你把这 5 组路径包装成了友好子命令。
+注意 `PATHS` 这一段：KV v2 对外暴露了 7 组路径：`config/`（配置）+ 数据面 5 组（`data/`、`delete/`、`destroy/`、`undelete/`、`metadata/`）+ 只读的 `subkeys/`，其中数据面那 5 组正是第 4 章要逐条讲的"版本与删除语义"。而 `vault kv get` 只是帮你把数据面这 5 组路径包装成了友好子命令。
 
 `vault path-help` 读的是**服务端**的插件描述，所以它永远和你的 Vault 版本一致，比记忆更可靠。
 

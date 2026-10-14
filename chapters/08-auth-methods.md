@@ -43,10 +43,13 @@ policies            [app-read default]
 ttl                 767h59m59s
 ```
 
-> **Vault CLI 的通用坑**：`-field=token` 是 flag，**必须写在位置参数 `username=...` 前面**——这是 Vault CLI（Go flag 解析）自身的规则，与操作系统、shell 无关。写成 `vault login -method=userpass username=alice password=alice-pw -field=token` 会报：
+> （节选：`vault token lookup` 的完整输出还有 `accessor`、`creation_ttl`、`entity_id`、`expire_time`、`renewable`、`type` 等字段。）
+
+> **Vault CLI 的通用坑**：`-field=token` 是 flag，**必须写在位置参数 `username=...` 前面**——这是 Vault CLI（Go flag 解析）自身的规则，与操作系统、shell 无关。写成 `vault login -method=userpass username=alice password=alice-pw -field=token` 时，CLI 只打印一句**警告**：
 > ```text
 > Command flags must be provided before positional arguments. The following arguments will not be parsed as flags: [-field=token]
 > ```
+> 注意它**不是报错**：这条命令照常登录成功（exit 0），被忽略的 `-field=token` 让输出变回**整张** token 表（`token` / `token_accessor` / `token_duration` / `token_policies` / `token_meta_username` …），并且 token 已经写进本地 token helper。**失败的不是这条命令，而是你的脚本**——`TOKEN=$(vault login ... -field=token)` 拿到的是"一整张表"而不是纯 token，后面 `vault token lookup "$TOKEN"` 之类的用法必然出错。flag 写在前面时 `-field=token` 才真正生效，只输出裸 token 一行。
 
 **生产上不建议用 userpass**：它自带密码库，意味着你要在 Vault 里再维护一套密码和轮换流程。正确做法是接公司已有身份：
 
@@ -78,8 +81,10 @@ vault write auth/oidc/role/developer \
   user_claim="email" \
   groups_claim="groups" \
   policies=app-read \
-  ttl=8h
+  token_ttl=8h
 ```
+
+> **注意**：`vault write auth/ldap/config` **不校验连通性**——上面那个占位地址 `ldaps://ldap.example.internal` 照样会返回 `Success!`，真正的错误要等到 `vault login -method=ldap` 时才暴露。同理，`auth/oidc/config` 里的 `https://example.okta.com` 只是占位地址，必须换成你自己的 IdP（见 8.4 的说明）。
 
 OIDC 登录的流程：浏览器打开 `vault login -method=oidc` → 跳转 IdP → 回调换取 Vault token。**证书/组映射都在 IdP 侧维护，离职即失效**，这才满足需求。
 
@@ -116,10 +121,12 @@ vault read auth/approle/role/ci-runner
 ```text
 Key                        Value
 ---                        -----
+alias_metadata             map[]
 bind_secret_id             true
+local_secret_ids           false
+secret_id_bound_cidrs      <nil>
 secret_id_num_uses         1          ← secret_id 只能用 1 次
 secret_id_ttl              10m        ← secret_id 10 分钟失效
-secret_id_bound_cidrs      <nil>
 token_bound_cidrs          []
 token_explicit_max_ttl     0s
 token_max_ttl              1h
@@ -154,10 +161,14 @@ ttl                 19m59s
 type                service
 ```
 
+> （节选：`vault token lookup` 的完整输出还有 `accessor`、`creation_ttl`、`entity_id`、`expire_time`、`meta`、`renewable` 等字段。）`ttl` 是**剩余** TTL，紧随登录时也可能显示 `20m`（取决于登录与查看是否落在同一秒），两种都正常。
+
 ```bash
 vault kv get -mount=app demo        # 允许 → 成功
 vault kv get -mount=app db/prod     # 越权 → exit 2, permission denied
 ```
+
+> **前置条件**：这两条要在完成第 4/5 章的 `app/` 挂载与 `app-read` 策略之后再跑。在还没有 `app/` 挂载的环境里，两条命令会**同样**报 `Code: 403 … preflight capability check returned 403, please ensure client's policies grant access to path "app/"`，看不出"允许/越权"的差别。
 
 **`secret_id_num_uses=1` 的意义**（实测）：
 
@@ -186,6 +197,7 @@ Key                              Value
 wrapping_token:                  hvs.CAESIIfTlQW...
 wrapping_accessor:               L31t9RfWjIKkh1tbtghfzx6W
 wrapping_token_ttl:              2m
+wrapping_token_creation_time:    2026-10-14 16:31:19.196393892 +0800 CST
 wrapping_token_creation_path:    auth/approle/role/ci-runner/secret-id
 wrapped_accessor:                5f44f7f5-16cf-d71d-b691-de5fb2c51d54
 ```
@@ -217,7 +229,14 @@ vault write auth/approle/role/ci-runner/secret-id-accessor/destroy secret_id_acc
 Success! Data written to: auth/approle/role/ci-runner/secret-id-accessor/destroy
 ```
 
-> **实测踩坑**：`.../secret-id/accessor/<acc>/destroy` 是**错误路径**，会返回 `404 unsupported path`。正确路径是 `secret-id-accessor/destroy`，accessor 放在请求体里。同理，lookup 用 `vault write .../secret-id-accessor/lookup secret_id_accessor=<acc>`（用 `read` 会得到 405）。
+> **实测踩坑**：`.../secret-id/accessor/<acc>/destroy` 是**错误路径**，`vault write -f auth/approle/role/ci-runner/secret-id/accessor/<acc>/destroy` 会返回：
+> ```text
+> Code: 404. Errors:
+> * 1 error occurred:
+> 	* unsupported path
+> ```
+> （不带 `-f`、也不带请求体时，CLI 会先在本地拒绝并报 `Must supply data or use -force`，根本到不了 API。）
+> 正确路径是 `secret-id-accessor/destroy`，accessor 放在请求体里。同理，lookup 用 `vault write .../secret-id-accessor/lookup secret_id_accessor=<acc>`（用 `read` 会得到 405）。
 
 ### 8.3 机器（二）：Kubernetes —— Pod 不放任何密钥
 
@@ -250,10 +269,23 @@ vault read auth/kubernetes/role/webapp
 ```
 
 ```text
+Key                                         Value
+---                                         -----
+alias_metadata                              map[]
+alias_name_source                           serviceaccount_uid
+audience                                    vault
 bound_service_account_names                 [webapp]
+bound_service_account_namespace_selector    n/a
 bound_service_account_namespaces            [prod]
+token_bound_cidrs                           []
+token_explicit_max_ttl                      0s
+token_max_ttl                               0s
+token_no_default_policy                     false
+token_num_uses                              0
+token_period                                0s
 token_policies                              [app-read]
 token_ttl                                   20m
+token_type                                  default
 ```
 
 Pod 内的应用只需：
@@ -268,8 +300,9 @@ vault write -field=token auth/kubernetes/login \
 
 ```text
 Error writing data to auth/kubernetes/config: Error making API request.
+URL: PUT http://127.0.0.1:8200/v1/auth/kubernetes/config
 Code: 400. Errors:
-* open /var/run/secrets/kubernetes.io/serviceaccount/ca.crt: The system cannot find the path specified.
+* open /var/run/secrets/kubernetes.io/serviceaccount/ca.crt: no such file or directory
 ```
 
 显式传 `kubernetes_ca_cert` 后就成功了。生产上通常配合 `disable_local_ca_jwt=true`、`token_reviewer_jwt` 用长期 reviewer token（或 Vault 1.21+/2.x 也支持用自身的 SA 方式），并给 reviewer 绑定 `system:auth-delegator` 权限。
@@ -301,6 +334,10 @@ token_ttl                  15m
 user_claim                 sub
 ```
 
+> （节选：`vault read auth/jwt/role/ci` 的完整输出还有 `alias_metadata`、`bound_claims`、`bound_subject`、`clock_skew_leeway`、`max_age`、`token_max_ttl`、`user_claim_json_pointer` 等字段。）
+
+> **注意**：上面的 `https://example.okta.com` **不是随便编的域名**——它是 Okta 一个**真实可解析的演示租户**，Vault 会真的拉取到 discovery 文档并写入成功。照抄会把你的 Vault 指向第三方租户，务必换成你自己 IdP 的地址。
+
 两个"必须要有的约束"（实测）：
 
 - **角色必须有至少一个绑定条件**（`bound_audiences` / `bound_claims` / `bound_subject` 之一），否则写入直接被拒：
@@ -327,8 +364,8 @@ vault list identity/entity/id
 vault write identity/entity/name/alice \
   policies=app-read
 # 把 userpass 的别名挂到该实体上
-vault write identity/entity-alias/id/'<alias_id>' \
-  name=alice canonical_id='<entity_id>' mount_accessor='<userpass_accessor>'
+vault write identity/entity-alias/id/"<alias_id>" \
+  name=alice canonical_id="<entity_id>" mount_accessor="<userpass_accessor>"
 ```
 
 归并后有两个直接好处：
@@ -362,7 +399,7 @@ auth/<方法> ────┼── approle                  （自动化：role
 ## 踩坑与检查清单
 
 - **AppRole 的 `role_id` 不是秘密，`secret_id` 才是。** 把 secret_id 提交进 Git 等于把钥匙贴在门上。用 `secret_id_ttl` + `secret_id_num_uses=1` + response wrapping 三重限制。
-- **别用 `ttl`/`max_ttl` 配置角色**：AppRole（以及 K8s/JWT）现在的参数名是 `token_ttl` / `token_max_ttl`，旧名已废弃。
+- **别用 `ttl`/`max_ttl` 配置角色**：AppRole（以及 K8s/JWT）现在的参数名是 `token_ttl` / `token_max_ttl`。AppRole 上写 `ttl`/`max_ttl` **不会报错但会被静默忽略**（角色里 `token_ttl`/`token_max_ttl` 仍是 `0s`），必须用 `token_ttl`/`token_max_ttl`。
 - **K8s 认证的绑定条件要三个维度都写**：`bound_service_account_names` + `bound_service_account_namespaces` + `audience`。只写名字很容易被别的命名空间蹭到。
 - **JWT 角色必须有绑定约束**，否则 Vault 直接拒绝写入（上文的 400 报错）。
 - **LDAP 的 `userfilter` 决定了"谁算 Vault 用户"**，别忘了把 group 映射到策略，否则登录进来是个没有任何权限的空 token。

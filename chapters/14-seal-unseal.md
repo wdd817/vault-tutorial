@@ -62,7 +62,9 @@ Sealed             true      ← 保险柜是锁着的
 Total Shares       0
 Threshold          0
 Unseal Progress    0/0
+Unseal Nonce       n/a
 Version            2.1.1
+Build Date         2026-09-15T21:21:56Z
 Storage Type       file
 HA Enabled         false
 ```
@@ -82,6 +84,9 @@ vault operator init -key-shares=3 -key-threshold=2 -format=json
   "unseal_shares": 3,
   "unseal_threshold": 2,
   "recovery_keys_b64": [],
+  "recovery_keys_hex": [],
+  "recovery_keys_shares": 0,
+  "recovery_keys_threshold": 0,
   "root_token": "hvs.dBs3..."
 }
 ```
@@ -97,7 +102,7 @@ root token len  = 28
 这一步发生了什么：
 
 1. Vault 生成**根密钥（root key）**，用它加密"加密密钥"，所有数据在磁盘上都是密文；
-2. 根密钥被 Shamir 算法切成 **3 份**，**任意 2 份**可以还原（3-of-2 阈值方案）；
+2. 根密钥被 Shamir 算法切成 **3 份**，**任意 2 份**可以还原（2-of-3 阈值方案）；
 3. 同时签发一个 **root token**——这是唯一一个"能创建一切"的身份。
 
 **把这两样东西当作最高机密处理**：
@@ -115,7 +120,7 @@ vault kv put -mount=secret hello value=world
 
 ```text
 Error making API request.
-URL: GET http://127.0.0.1:8300/v1/sys/internal/ui/mounts/secret/hello
+URL: GET http://127.0.0.1:8300/v1/sys/internal/ui/mounts/secret
 Code: 503. Errors:
 * Vault is sealed
 ```
@@ -138,6 +143,10 @@ Total Shares       3
 Threshold          2
 Unseal Progress    1/2           ← 进度 1/2
 Unseal Nonce       3672f5c4-a1ac-91d0-84da-5afb18e925d4
+Version            2.1.1
+Build Date         2026-09-15T21:21:56Z
+Storage Type       file
+HA Enabled         false
 ```
 
 ```bash
@@ -153,15 +162,17 @@ Sealed          false         ← 解封成功
 Total Shares    3
 Threshold       2
 Version         2.1.1
-Cluster Name    vault-cluster-18f797ba
+Build Date      2026-09-15T21:21:56Z
 Storage Type    file
+Cluster Name    vault-cluster-adcaef5e
+Cluster ID      178f190a-e3c3-76e7-8c88-da24069c7e2c
 HA Enabled      false
 ```
 
 要点：
 
 - **每把 key 是独立的**，Vault 用 `Unseal Nonce` 关联同一次解封过程；
-- 提供**多余的 key**（比如给第 3 把）会重置进度或报错，按提示数量给；
+- 提供**多余的 key**（比如给第 3 把）不会出错，但也不起作用：重复提交同一把 key 会被**静默忽略**（不推进进度、不报错，`Unseal Nonce` 不变）；已解封后再提交 key 也只是回显状态表，同样不报错；
 - 解封是**内存操作**：Vault 从不把 unseal key 写到磁盘。
 
 ### 14.6 重启后：数据还在，但必须重新解封（核心验证）
@@ -203,6 +214,8 @@ Initialized        true      ← 还记得自己已初始化
 Sealed             true      ← 但锁着
 Total Shares       3
 Threshold          2
+Unseal Progress    0/2
+Unseal Nonce       n/a
 Storage Type       file
 ```
 
@@ -274,7 +287,7 @@ vault operator seal
 Success! Vault is sealed.
 ```
 
-加封常用于维护窗口（例如升级前）。注意：**加封后所有 token 立即失效**（内存里的密钥被清掉）。
+加封常用于维护窗口（例如升级前）。注意：**加封后所有 API 请求都会失败**（`Code: 503 … Vault is sealed`），但 token 本身**不会**被撤销；重新解封后原有 token（包括 seal 前创建的子 token）立即恢复可用。要真正作废 token 请用 `vault token revoke`。
 
 ### 14.8 自动解封（Auto-unseal）
 
@@ -315,16 +328,21 @@ seal "transit" {
 # 启动一次 rekey（需要达到当前阈值数量的现有 key）
 vault operator rekey -init -key-shares=5 -key-threshold=3
 
-# 按提示依次提交现有 key，然后 Vault 会输出新的 key 份额
-vault operator rekey '<当前 key 1>'
-vault operator rekey '<当前 key 2>'
+# 回显里会给出 Nonce，后续每次提交 key 都必须带上它
+NONCE=29877c57-ea3a-bb64-8b43-8952633945f6
 
-# 可选：备份当前密钥（谨慎使用）
+# 按提示依次提交现有 key（达到当前阈值后 Vault 会输出新的 key 份额）
+vault operator rekey -nonce="$NONCE" '<当前 key 1>'
+vault operator rekey -nonce="$NONCE" '<当前 key 2>'
+
+# 可选：找回本次新生成、已用 PGP 加密备份的 key（谨慎使用）
 vault operator rekey -backup-retrieve
 vault operator rekey -backup-delete
 ```
 
-> `-backup` 会生成一份"用于回滚的旧密钥备份"，使用后应当立刻 `-backup-delete`。
+> `-nonce` 不能省：只写 `vault operator rekey '<key>'` 会直接报 `Missing nonce value: specify it via the -nonce flag`（退出码 1）。
+>
+> `-backup` 必须与 `-pgp-keys` 同用（PGP 公钥个数要等于 `-key-shares`，不等会报 `incorrect number of PGP keys for rekey`）：它备份的是**本次新生成**的 PGP 加密 key，用于输出丢失后找回，**不是**旧 key、不能用于回滚。没有备份时 `-backup-retrieve` 报 `Code: 400 ... no backed-up keys found`；`-backup-delete` 回显 `Success! Delete stored keys (if they existed)`。使用后应当立刻 `-backup-delete`。
 
 ## 原理：为什么 Vault 必须"上锁启动"
 

@@ -18,9 +18,11 @@
 | --- | --- | --- |
 | KV v2 的静态密钥 | ❌ 无 | 它不会"过期"，Vault 不需要跟踪 |
 | 动态数据库凭据 | ✅ 有 | 到期/撤销时要执行 `DROP USER` |
-| Transit 的 datakey | ✅ 有 | 到期后不再保证密钥可用 |
+| Transit 的 datakey | ❌ 无 | v2.1.1 实测不登记租约（见下） |
 | PKI 签发的证书 | ⚠️ 视配置 | `generate_lease=true` 时产生租约 |
-| Token | ⚠️ 部分 | token 自己有 TTL；但 service token 的 `lease_id` 字段返回空（实测） |
+| Token | ⚠️ 部分 | token 自己有 TTL，但它不受 `sys/leases/*` 管理：`vault token lookup` 的 `.data` 里**根本没有** `lease_id` 字段（实测 `has("lease_id")` 为 `false`、取值是 `null`）；`vault token create` 的顶层虽然有 `lease_id`，但恒为空串、`lease_duration` 恒为 0 |
+
+> **实测更正：Transit 在 v2.1.1 不产生租约。** `transit/datakey/plaintext`、`datakey/wrapped`、`transit/random`、`transit/encrypt`、`transit/rewrap` 的返回体里 `lease_id` 都是空、`lease_duration` 都是 `0`、`renewable` 都是 `false`，`vault list sys/leases/lookup/transit` 也报 `No value found`。作为对照，同一次实验里 database 的动态凭据是 `lease_id=database/creds/app-readonly/... lease_duration=3600 renewable=true`。
 
 实测一个容易被误解的点——**token 不是"租约对象"**：
 
@@ -31,7 +33,7 @@ vault token lookup -format=json "$TOKEN" | jq -r '.data | [.accessor, .lease_id,
 
 ```text
 accessor  : npSvzphcJz3rv66D79BTvRSG
-lease_id  :          ← 空
+lease_id  :          ← 字段不存在（取值为 null）
 ttl       : 1800
 type      : service
 renewable : True
@@ -77,6 +79,7 @@ vault lease lookup database/creds/app-readonly/AbC123...
 Key             Value
 ---             -----
 expire_time     2026-09-23T21:30:00+08:00
+id              database/creds/app-readonly/AbC123...
 issue_time      2026-09-23T20:30:00+08:00
 last_renewal    <nil>
 renewable       true
@@ -124,8 +127,10 @@ vault lease revoke -prefix auth/token/create
 
 ```text
 Error revoking leases with prefix auth/token/create: Error making API request.
+
 URL: PUT http://127.0.0.1:8200/v1/sys/leases/revoke-prefix/auth/token/create
 Code: 403. Errors:
+
 * 1 error occurred:
 	* permission denied
 ```
@@ -146,7 +151,7 @@ All revocation operations queued successfully!
 
 > ⚠️ **我在写这一章时踩到的真实教训**：执行 `vault lease revoke -prefix auth/token/create` 之后，**我自己正在使用的 token 也被撤销了**（dev 环境的 root token 同样在里面），整个实验环境当场失效，只能重启 Vault。
 >
-> 这不是 bug，而是"按前缀撤销"的语义：**它撤销的是该前缀下的所有租约，包括你和你的自动化正在用的那个**。触发条件在 5.5 实测过：**调用者自己也在该前缀下**时才会连坐——普通子 token 调用时它自己被撤、root 不受影响；直接拿 root 调用时 root 一起失效。生产上请把它当作"核按钮"：
+> 这不是 bug，而是"按前缀撤销"的语义：**它撤销的是 `lease_id` 命中该前缀的所有租约，包括你和你的自动化正在用的那个**。触发条件在 5.5 实测过：**只看前缀有没有命中某条租约的 `lease_id`，与"谁在调用"无关**——token store 创建的 token（`vault token create`，**含 root、含带 `sudo` 的调用者自己**）租约都登记在 `auth/token/create` 下，所以**无论谁来按这个按钮，root 都会一起失效**。全新 dev 实例上只有 root 一个身份时，`vault list sys/leases/lookup/auth/token/create` 只列出一条 `auth/token/create/34e737a9…`，它的 `issue_time` 正好等于 root token 的 `creation_time`（`expire_time` 为 null）——这就是 root 一起失效的原因。唯一能活下来的是**通过其它认证方式登录**得到的身份（userpass / AppRole 等，租约在 `auth/userpass/login/<user>` 下）。生产上请把它当作"核按钮"：
 > - 只给极少数值班人/自动化；
 > - 执行前确认自己要撤销的**精确前缀**；
 > - 确保有别的可用身份（否则会把自己锁在门外）；
@@ -179,23 +184,25 @@ vault lease revoke -prefix auth/token/create
 | --- | --- | --- |
 | `sys/leases/renew` | `update` | 续期（`default` 策略已包含） |
 | `sys/leases/lookup` | `update` | 查询租约（`default` 策略已包含） |
-| `sys/leases/revoke` | `update` | 撤销单条（**不需要 `sudo`**） |
+| `sys/leases/revoke/*` | `update` | 撤销单条（**不需要 `sudo`**） |
 | `sys/leases/revoke-prefix/*` | `sudo` + `update` | 批量撤销（危险，**必须 `sudo`**） |
-| `sys/leases/lookup/*` | `list`、`read` | 浏览租约清单 |
+| `sys/leases/lookup/*` | `list` + `sudo` | 浏览租约清单（**两者缺一即 403**） |
 
 > **实测对照，别把这两行的权限记混**：同一条 `vault lease revoke` 命令，走哪个端点决定了要不要 `sudo`。
 >
 > - **单条**（`vault lease revoke <lease_id>` → `sys/leases/revoke/*`）：只需要 `update`。实测把调用者的 `sudo` 去掉，行为一模一样；反过来只给 `read`/`list` 会 403。
 > - **按前缀**（`vault lease revoke -prefix <prefix>` → `sys/leases/revoke-prefix/*`）：`update` 不够，**必须显式带 `sudo`**，否则 403。验证方法见第 5 章 5.5。
 >
-> 所以"只给 `sys/leases/*` 全开"是典型的过度授权——等于把核按钮发给每个值班同事。给单条撤销就写 `sys/leases/revoke`，批量撤销再单独、按前缀地开 `sudo`。
+> 所以"只给 `sys/leases/*` 全开"是典型的过度授权——等于把核按钮发给每个值班同事。给单条撤销就写 `sys/leases/revoke/*`，批量撤销再单独、按前缀地开 `sudo`。
+>
+> **还有一行容易被漏掉：列清单要 `sudo`。** `vault list sys/leases/lookup/<prefix>` 需要 `list` **和** `sudo` 两个能力，只给其中任何一个都是 403（实测穷举）：`["list"]` → 403、`["sudo"]` → 403、`["list","sudo"]` → `Keys`。而**查单条**（`vault lease lookup <id>` / `vault write sys/leases/lookup lease_id=...`，走的是 `sys/leases/lookup` 这个精确路径的 `update`）**不需要 `sudo`**，`default` 策略里已经带了。所以"看得到租约清单"和"能查一条租约"是两种不同的授权，别记混。
 
 一条实用的值班策略：
 
 ```hcl
 # lease-operator.hcl
-path "sys/leases/lookup/*" {
-  capabilities = ["list", "read", "update"]
+path "sys/leases/lookup/database/creds/*" {
+  capabilities = ["list", "sudo"]
 }
 
 path "sys/leases/renew" {
@@ -207,7 +214,7 @@ path "sys/leases/revoke-prefix/database/creds/app-readonly" {
 }
 ```
 
-注意最后一条：**把 `-prefix` 的权限收窄到具体前缀**，而不是 `sys/leases/revoke-prefix/*`。这样值班同事能处理业务故障，但无法一键清空整个 Vault 的 token。
+注意最后一条：**把 `-prefix` 的权限收窄到具体前缀**，而不是 `sys/leases/revoke-prefix/*`。这样值班同事能处理业务故障，但无法一键清空整个 Vault 的 token。同理，列租约清单的 `list` + `sudo` 也按前缀收窄到 `sys/leases/lookup/database/creds/*`，而不是 `sys/leases/lookup/*` 全开。
 
 ## 原理：租约是"临时性的账本"
 
