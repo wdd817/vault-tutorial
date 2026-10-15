@@ -102,9 +102,39 @@ lease_renewable    true
 
 要点：
 
-- `-increment` 是**请求**值，Vault **不保证**满足——最终受角色的 `max_ttl` 限制（第 6 章的 `max_ttl=24h` 就是这里起作用）；
-- 续期不会改变密钥内容，只是延长寿命；
+- `-increment` 是**请求**值，Vault **不保证**满足——上限是角色的 `max_ttl`（第 6 章的 `max_ttl=24h` 就是这里起作用）；
+- 续期不会改变密钥内容，只是延长寿命（第 6 章 6.5 实测：续期后用同一个用户名、同一个密码仍然能连库）；
 - token 的续期走 `vault token renew`，而且**周期 token 可以无限续期**（第 7 章）。
+
+**被"打折"的时候 Vault 会明说。** 实测把角色配成 `default_ttl=20s`、`max_ttl=45s`，再请求续 1 小时：
+
+```bash
+vault lease renew -increment=1h database/creds/app-max/<lease-id>
+```
+
+```text
+Key                Value
+---                -----
+lease_id           database/creds/app-max/2hP4hT0BLllCMi541JTU8Y28
+lease_duration     44s
+lease_renewable    true
+
+WARNING! The following warnings were returned from Vault:
+
+  * TTL of "1h" exceeded the effective max_ttl of "44s"; TTL value is capped
+  accordingly
+```
+
+返回 `44s` 而不是 `45s`，是因为 `max_ttl` 从**签发时刻**起算，执行续期时已经过去 1 秒。这也说明**续期不可能无限重复**：硬顶一到，就必须重新申请一份（第 6 章 6.5）。
+
+**"已经过期"又是另一回事**，两个查询会给你两个不同的错误（实测），它们就是业务侧"该换号了"的判定依据：
+
+| 命令 | 租约已过期时 |
+| --- | --- |
+| `vault lease lookup <lease-id>` | `Code: 400`、`* invalid lease` |
+| `vault lease renew <lease-id>` | `Code: 400`、`* lease not found` |
+
+重试一万次也不会回来：唯一的动作是重新申请一份，用新凭据重建连接（第 6 章 6.6）。
 
 ### 12.4 撤销：单个、按前缀
 
@@ -241,7 +271,7 @@ path "sys/leases/revoke-prefix/database/creds/app-readonly" {
 - **别混淆 token 与 lease**：token 用 `vault token renew/revoke`；动态密钥用 `vault lease renew/revoke`。
 - **续期请求可能被"打折"**：`-increment` 只是请求值，以返回的 `lease_duration` 为准。
 - **`max_ttl` 是安全阀**：给角色配 `max_ttl` 时要想清楚"最坏情况下这个凭据能活多久"。
-- **动态凭据的业务侧要能处理"到期"**：至少要能重新申请；更好的做法是用 Agent 自动续期/重取（第 9 章）。
+- **动态凭据的业务侧要能处理"到期"**：续期、重取、**重建连接池**三件事缺一不可；Agent 能自动续期/重取并重写文件，但换连接仍然是应用的活（第 6 章 6.5、6.6，第 9 章 9.5）。
 - **租约撤销失败要告警**：数据库连不上时账号删不掉，这是"看似撤销、实际还在"的隐患。
 - **定期巡检 `sys/leases/lookup` 下的异常长租约**，尤其是 `auth/token/create` 下数量异常的情况。
 

@@ -32,21 +32,21 @@ vault write -f -field=secret_id auth/approle/role/ci-runner/secret-id > agent/se
 
 ```hcl
 # agent/config.hcl
-pid_file = "./pid"
+pid_file = "./agent/pid"
 
 auto_auth {
   method "approle" {
     mount_path = "auth/approle"
     config = {
-      role_id_file_path                   = "./role-id"
-      secret_id_file_path                 = "./secret-id"
+      role_id_file_path                   = "./agent/role-id"
+      secret_id_file_path                 = "./agent/secret-id"
       remove_secret_id_file_after_reading = false
     }
   }
 
   sink "file" {
     config = {
-      path = "./token"
+      path = "./agent/token"
       mode = 0640
     }
   }
@@ -57,7 +57,7 @@ vault {
 }
 
 template {
-  destination = "./rendered.env"
+  destination = "./agent/rendered.env"
   contents    = <<EOT
 {{- with secret "app/data/demo" -}}
 APP_USERNAME={{ .Data.data.username }}
@@ -66,6 +66,8 @@ APP_PASSWORD={{ .Data.data.password }}
 EOT
 }
 ```
+
+> **路径约定**：本节所有命令都在**仓库根目录**执行，所以配置里的相对路径统一写成 `./agent/...`——它相对的是 **Agent 进程的工作目录**，不是配置文件所在目录（这个坑 9.3 会详细讲）。
 
 逐一解释：
 
@@ -97,14 +99,14 @@ vault agent -log-level=info -config=./agent/config.hcl
 >    error creating file sink: error during write check: error opening temp file in dir nodir for writing:
 >    open nodir/token.tmp.187d34c0: no such file or directory
 >    ```
->    解决办法：在配置里用绝对路径，或者在正确的目录下启动（用 systemd 托管时工作目录默认是 `/`，更应该写绝对路径）。
+>    解决办法：在配置里用绝对路径，或者在正确的目录下启动（用 systemd 托管时工作目录默认是 `/`，更应该写绝对路径）。本节统一**在仓库根目录启动、配置里写 `./agent/...`**，两边对得上就不会踩这个坑。
 
 启动成功后的关键日志：
 
 ```text
 [INFO]  agent.template.server: starting template server
 [INFO]  agent.template.server: template server received new token
-[INFO]  agent: (runner) rendered "(dynamic)" => "./rendered.env"
+[INFO]  agent: (runner) rendered "(dynamic)" => "./agent/rendered.env"
 ```
 
 渲染产物（实测）：
@@ -120,7 +122,7 @@ token sink（实测，内容已脱敏）：
 hvs.CAESII...
 ```
 
-**至此，应用侧只需要 `cat rendered.env` 或 `source rendered.env`，一行代码都不用改。**
+**至此，应用侧只需要 `cat agent/rendered.env` 或 `source agent/rendered.env`，一行代码都不用改。**
 
 ### 9.4 它有"持续工作"的能力
 
@@ -157,7 +159,51 @@ APP_PASSWORD=rotated-by-ops
 
 对"轮换后要平滑生效"的服务，这比"重启才能加载新密码"安全得多。
 
-### 9.5 一次性使用：`-exit-after-auth`
+不过上面这一套有个前提：**KV v2 的密钥没有租约**，Agent 只能按固定间隔轮询。数据库账号这类**动态凭据**是另一回事——它们带 `lease_id`，Agent 会替你做掉 6.6 里的 ① 和 ②。
+
+### 9.5 有租约的密钥：Agent 自己续期、自己换号
+
+对带 `lease_id` 的响应（比如 `database/creds/*`），Agent 不靠轮询，而是**续期**：快到点时 `renew`，续到角色的 `max_ttl` 续不动时**重新申请一份**并重写文件。
+
+想亲手看这个节奏，把角色 TTL 调短即可（照 6.3 的样子建，只改两个 TTL；新角色名同样要加进连接的 `allowed_roles`）：
+
+```bash
+vault write database/roles/app-agent \
+  db_name=mysql-app \
+  creation_statements="CREATE USER '{{name}}'@'%' IDENTIFIED BY '{{password}}'; GRANT SELECT ON orders.* TO '{{name}}'@'%';" \
+  default_ttl=20s \
+  max_ttl=26s
+```
+
+实测（150 秒里渲染文件变了 9 次，每次用户名都是新的）：
+
+```text
+[INFO]  agent: (runner) rendered "(dynamic)" => "db.env"
+[WARN]  agent: vault.read(database/creds/app-agent): renewer done (maybe the lease expired)
+[DEBUG] agent: (runner) rendering "(dynamic)" => "db.env"
+[INFO]  agent: (runner) rendered "(dynamic)" => "db.env"
+```
+
+模板只要把 secret 路径换掉（auto_auth、sink 等配置与 9.2 相同）：
+
+```hcl
+template {
+  destination = "/etc/myapp/db.env"
+  command     = ["systemctl", "reload", "myapp"]   # 每次渲染后执行，用来通知应用
+  contents    = <<EOT
+{{- with secret "database/creds/app-agent" -}}
+DB_USER={{ .Data.username }}
+DB_PASS={{ .Data.password }}
+{{- end -}}
+EOT
+}
+```
+
+注意数据库凭据的字段是**平铺**的（`{{ .Data.username }}`），没有 KV v2 那层嵌套的 `data`，别照抄上面的 KV 写法。
+
+> **Agent 只到文件为止。** 它保证文件里永远是当前有效的凭据，却不知道你的连接池在哪；"用新凭据重建连接"仍然要做在应用里。`command` 就是交接点：Agent 每次渲染后都会执行它（实测日志里是 `executing command ...`），换成你自己的 reload 脚本或 `systemctl reload <你的服务>` 即可。应用侧那三步（续期 → 重取 → 重建连接池）见 6.6。
+
+### 9.6 一次性使用：`-exit-after-auth`
 
 CI 里通常只需要"登录并渲染一次"，渲染完就可以退出：
 
@@ -167,7 +213,7 @@ vault agent -config=agent/config.hcl -exit-after-auth
 
 配合 `secret_id_num_uses=1`，一次 CI 运行消耗一个一次性凭证，任务结束不留活 token。
 
-### 9.6 作为服务常驻
+### 9.7 作为服务常驻
 
 生产上把 Agent 交给 init 系统管理：
 
@@ -190,7 +236,7 @@ WantedBy=multi-user.target
 
 Linux 下用 systemd（上面的 unit）托管即可；macOS 上可以用 `launchd` 写一个等价的 plist。**注意**：用 systemd 托管时服务的工作目录默认是 `/`，与交互式终端不同，配置里的所有路径都请写绝对路径。
 
-### 9.7 Vault Proxy：更"透明"的一种形态
+### 9.8 Vault Proxy：更"透明"的一种形态
 
 `vault proxy` 是 Agent 的兄弟命令，适合想保留标准 Vault API 但需要本地缓存的场景：
 
@@ -199,7 +245,7 @@ vault proxy -config=proxy/config.hcl
 # 应用把 VAULT_ADDR 指向 http://127.0.0.1:8100，其余代码不变
 ```
 
-> 注意：这条命令是在仓库根目录执行的；配置里的相对路径仍以**进程工作目录**为准，细节见本节末尾。
+> 注意：这条命令是在**仓库根目录**执行的，而 `proxy/config.hcl` 里的相对路径（`./role-id` 等）解析到的是**进程工作目录**（也就是仓库根目录），不是配置文件所在的 `proxy/`。本节末尾给了两种起法，任选一种、并保持前后一致。
 
 `proxy/config.hcl` 与 Agent 的配置很像，但有两点必须写对：
 
@@ -295,6 +341,7 @@ curl -s http://127.0.0.1:8100/v1/app/data/demo
 - **模板语法用 Go template**：`{{ .Data.data.username }}` 中的 `.Data.data` 是 KV v2 的嵌套结构（`data` 里还有 `data`），写错不会报错，只会渲染出空值。
 - **template 默认会"等待依赖就绪"**：依赖的 secret 不存在时 Agent 会重试而不是退出，排查时看日志里的 render 失败信息。
 - **`secret_id` 文件用 `-f` 覆盖前先确认权限**：临时文件不要落在共享目录。
+- **不写 `remove_secret_id_file_after_reading = false`，`secret_id` 文件会被删掉。** 这一项的默认值是 `true`：Agent 读一次就删，进程重启后只剩 `no known secret ID` 一直退避重试（实测）。需要重启后自动登录常驻服务，就显式写 `false`；CI 这种"用完就废"的场景反而应该保持 `true`，并配合 `secret_id_num_uses=1`。
 - **不要把 rendered 文件放到 docker 镜像层里**：它包含明文密钥，应该在启动时挂卷渲染。
 - **Agent 不是"密钥分发中心"**：它只是同机的一个客户端。跨主机的密钥投递仍然要靠 Vault 本身（各主机各自跑 Agent）。
 

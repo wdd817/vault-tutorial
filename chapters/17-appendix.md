@@ -142,7 +142,7 @@ vault list sys/leases/lookup/auth/token/create
 vault write sys/leases/lookup lease_id='<lease_id>'
 ```
 
-> **注意**：静态角色名（`legacy-report`）也要出现在连接的 `allowed_roles` 里（第 6 章 6.2 有实测说明）。
+> **注意**：静态角色名（`legacy-report`）也要出现在连接的 `allowed_roles` 里（第 6 章 6.7 有实测说明）。
 
 > **注意**：`lease` 命令适用于**动态密钥/认证方法**签发的租约；token 自己的租约要用 `vault token renew`——对 `auth/token/create/...` 走 `lease renew` 会报 `tokens cannot be renewed through this endpoint`。
 
@@ -233,6 +233,9 @@ vault read sys/internal/ui/mounts/app/data/demo   # 查看路径解析结果
 | `must have at least one bound constraint` | 认证角色缺少绑定条件 | 加 `bound_audiences`/`bound_claims` |
 | `open /var/run/secrets/...` | K8s 认证未显式提供 CA | 传 `kubernetes_ca_cert` |
 | `batch tokens cannot be renewed` | 对 batch token 续期 | batch 不支持续期，重建 token |
+| `invalid lease` | 这条租约已经不存在（已过期或已撤销） | 别继续 `renew`，重新申请一份凭据（第 6 章 6.5、6.6） |
+| `lease not found` | 同上，`renew`/撤销一条已消失的租约时的说法 | 同上 |
+| `"<role>" is not an allowed role` | 角色名不在连接的 `allowed_roles` 里 | 补 `allowed_roles`（第 6 章 6.2、6.7） |
 | `flag provided but not defined` | 参数名写错 | `vault <cmd> -help` |
 | `Command flags must be provided before positional arguments` | flag 位置错（Vault CLI 要求 flag 写在位置参数前） | flag 提前 |
 | `invalid character '-' in numeric literal` | CLI 把路径当数字解析（如 `pki/crl/pem`） | 用 `pki/cert/crl` |
@@ -269,7 +272,7 @@ vault read sys/internal/ui/mounts/app/data/demo   # 查看路径解析结果
 
 1. 用 Transit 加密一列数据，并验证"只能加密不能解密"的策略；
 2. 用 PKI 签发一张 24 小时证书，并用 Agent 自动续期；
-3. 用第 6 章建好的动态数据库角色，观察租约到期或撤销时账号被自动 `DROP`；
+3. 用第 6 章建好的动态数据库角色，把一份凭据的一生走完：续期一次、放到过期（看 `mysql.user` 里的账号消失）、再重新申请一份，并确认断线重连会撞上 `1045`；
 4. 打开审计设备，观察一次完整请求的两条日志。
 
 **第四周（对应第 14-16 章）**
